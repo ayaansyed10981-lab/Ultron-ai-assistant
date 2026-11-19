@@ -1,0 +1,42 @@
+# ============================================================
+# Git Ignore for Ultron AI Assistant
+# ============================================================
+
+# 1. Environment & API Secrets (CRITICAL: NEVER COMMIT API KEYS)
+.env
+.env.local
+.env.*.local
+*.env
+*.key
+*.pem
+
+# 2. Node Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 3. Personal Voice Profile (Your personal acoustic recordings & templates)
+voice-profile/
+*.pcm
+*.raw
+*.wav
+
+# 4. Runtime Logs & Temporary System Buffers
+logs/
+*.log
+.tmp/
+temp/
+
+# 5. Large Sherpa-ONNX Neural Speech Models (GitHub blocks files > 100MB)
+models/
+
+# 6. Windows / OS / Editor metadata
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.suo
+*.user

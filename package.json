@@ -1,0 +1,21 @@
+{
+  "name": "jarvis-assistant",
+  "version": "1.0.0",
+  "description": "Personal 24/7 Voice AI Assistant (Jarvis) built natively for Windows 11 ARM64 (Snapdragon) powered by Gemini API",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:silent": "node src/index.js --no-cli",
+    "diagnose": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-arm64-diagnostics.ps1",
+    "install-autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-autostart.ps1",
+    "uninstall-autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-autostart.ps1"
+  },
+  "dependencies": {
+    "@google/genai": "^3.2.0",
+    "docx": "^9.15.4",
+    "dotenv": "^16.4.7",
+    "mammoth": "^1.13.0",
+    "sherpa-onnx-node": "^2.0.1"
+  }
+}
