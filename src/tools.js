@@ -178,7 +178,7 @@ export class ComputerController {
         type: 'function',
         name: 'open_app',
         description:
-          'Launch an application on Windows (e.g., notepad, calculator, chrome, edge, vscode, spotify, explorer, settings, terminal, task manager, paint, word, excel, clock, camera, whatsapp, or any executable path).',
+          'Launch an application on Windows ONLY when the user explicitly commands you to open, launch, or start an app (e.g. "open notepad", "launch calculator", "open vs code", "open spotify"). NEVER launch an app when the user is asking a question or having a conversation.',
         parameters: {
           type: 'object',
           properties: {
@@ -198,13 +198,13 @@ export class ComputerController {
         type: 'function',
         name: 'open_url',
         description:
-          'Open a website URL or search query in the user default web browser (e.g. YouTube, Google search, Gmail, news).',
+          'Open a website URL in the browser ONLY when the user explicitly commands you to "open browser", "open website", or "open this link". NEVER use this tool to answer general knowledge questions, questions about characters (like Obito, Naruto, etc.), definitions, or trivia. Always answer knowledge questions directly from your own AI brain.',
         parameters: {
           type: 'object',
           properties: {
             url: {
               type: 'string',
-              description: 'Full URL to open (e.g., https://www.youtube.com/results?search_query=lofi).',
+              description: 'Full URL to open (e.g., https://github.com).',
             },
           },
           required: ['url'],

@@ -146,21 +146,21 @@ export async function tryFastPath(rawText, controller) {
     return 'Locking your PC, sir.';
   }
 
-  // 4. Web Searches (YouTube / Google)
-  const ytMatch = text.match(/^(?:search youtube for|youtube search|play on youtube)\s+(.+)$/);
+  // 4. Explicit Web Searches (ONLY when user explicitly asks to open browser/YouTube)
+  const ytMatch = text.match(/^(?:open youtube and search (?:for )?|play on youtube)\s+(.+)$/);
   if (ytMatch) {
     const q = ytMatch[1].trim();
     const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
     await controller.executeTool('open_url', { url });
-    return `Searching YouTube for ${q}, sir.`;
+    return `Opening YouTube for ${q}, sir.`;
   }
 
-  const googleMatch = text.match(/^(?:google|search(?: google)? for)\s+(.+)$/);
-  if (googleMatch) {
-    const q = googleMatch[1].trim();
+  const browserSearchMatch = text.match(/^(?:open (?:the )?browser and search (?:for )?|open google and search (?:for )?)\s+(.+)$/);
+  if (browserSearchMatch) {
+    const q = browserSearchMatch[1].trim();
     const url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
     await controller.executeTool('open_url', { url });
-    return `Searching Google for ${q}, sir.`;
+    return `Searching Google for ${q} in your browser, sir.`;
   }
 
   // 5. Open Apps or Popular Websites
