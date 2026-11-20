@@ -58,11 +58,12 @@ function buildKeywordsFile(wakeWords) {
     .map((l) => l.split(/\s+/)[0])
     .filter(Boolean);
   const tokenSet = new Set(tokens);
+  const BPE = '\u2581';
 
   const tokenizeWord = (word) => {
     const clean = word.replace(/[^a-zA-Z]/g, '').toUpperCase();
     if (!clean) return null;
-    const s = `▁${clean}`;
+    const s = `${BPE}${clean}`;
     const out = [];
     let i = 0;
     while (i < s.length) {
@@ -82,6 +83,16 @@ function buildKeywordsFile(wakeWords) {
   };
 
   const lines = new Set();
+  const safeAdd = (line) => {
+    const parts = line.split('@')[0].trim().split(/\s+/);
+    for (const t of parts) {
+      if (!tokenSet.has(t)) {
+        return;
+      }
+    }
+    lines.add(line);
+  };
+
   for (const phrase of wakeWords) {
     const parts = phrase
       .trim()
@@ -90,16 +101,31 @@ function buildKeywordsFile(wakeWords) {
       .filter(Boolean);
     if (parts.length > 0) {
       const label = phrase.trim().replace(/\s+/g, '_');
-      lines.add(`${parts.join(' ')} @${label}`);
+      safeAdd(`${parts.join(' ')} @${label}`);
     }
   }
 
   // Always include high-recall Ultron phonetic BPE variants
-  lines.add('▁HE Y ▁ UL T RO N @Hey_Ultron');
-  lines.add('▁ UL T RO N @Ultron');
-  lines.add('▁A L T RO N @Ultron');
-  lines.add('▁HE Y ▁A L T RO N @Hey_Ultron');
-  lines.add('▁OKAY ▁ UL T RO N @Okay_Ultron');
+  safeAdd(`${BPE}HE Y ${BPE} UL T RO N @Hey_Ultron`);
+  safeAdd(`${BPE} UL T RO N @Ultron`);
+  safeAdd(`${BPE}A L T RO N @Ultron`);
+  safeAdd(`${BPE}HE Y ${BPE}A L T RO N @Hey_Ultron`);
+  safeAdd(`${BPE}OKAY ${BPE} UL T RO N @Okay_Ultron`);
+
+  // Agent Vision (Coding & SQL Specialist) - Exact Zipformer BPE tokens
+  safeAdd(`${BPE}HE Y ${BPE}VI S ION @Hey_Vision`);
+  safeAdd(`${BPE}VI S ION @Vision`);
+  safeAdd(`${BPE}OKAY ${BPE}VI S ION @Okay_Vision`);
+
+  // Agent Friday (Word & PDF Specialist) - Exact Zipformer BPE tokens (NO "Doc" or "Writer" to prevent false triggers!)
+  safeAdd(`${BPE}HE Y ${BPE}F RI DAY @Hey_Friday`);
+  safeAdd(`${BPE}F RI DAY @Friday`);
+  safeAdd(`${BPE}OKAY ${BPE}F RI DAY @Okay_Friday`);
+
+  // Agent Jarvis (QA & System Inspector Specialist) - Exact Zipformer BPE tokens
+  safeAdd(`${BPE}HE Y ${BPE}JA R VI S @Hey_Jarvis`);
+  safeAdd(`${BPE}JA R VI S @Jarvis`);
+  safeAdd(`${BPE}OKAY ${BPE}JA R VI S @Okay_Jarvis`);
 
   const kwFile = path.join(TEMP_DIR, 'ultron_keywords.txt');
   fs.writeFileSync(kwFile, `${Array.from(lines).join('\n')}\n`, 'utf8');
@@ -209,13 +235,47 @@ export class AudioOutputWorker {
     }
   }
 
+  getVoiceForAgent(agent = 'ultron') {
+    const norm = String(agent || 'ultron').toLowerCase();
+    if (norm === 'vision' || norm === 'coder' || norm === 'cypher') {
+      return { windowsVoice: 'David', geminiVoice: 'Puck' };
+    }
+    if (norm === 'friday' || norm === 'writer' || norm === 'scribe' || norm === 'doc') {
+      return { windowsVoice: 'Zira', geminiVoice: 'Aoede' }; // Zira is Windows native female voice
+    }
+    if (norm === 'jarvis' || norm === 'inspector' || norm === 'qa') {
+      return { windowsVoice: 'David', geminiVoice: 'Charon' }; // Jarvis: Articulate British quality auditor
+    }
+    return {
+      windowsVoice: this.config.windowsTtsVoice || 'Mark',
+      geminiVoice: this.config.geminiTtsVoice || 'Fenrir',
+    };
+  }
+
   async speakWindows(text, voice = this.config.windowsTtsVoice) {
     if (!text || !text.trim()) return;
     await this._send({ action: 'speak', text, voice });
   }
 
   async wakeReply() {
-    await this._send({ action: 'wake_reply' });
+    await this._send({ action: 'wake_reply', agent: 'ultron' });
+  }
+
+  async wakeReplyForAgent(agent = 'ultron') {
+    const norm = String(agent || 'ultron').toLowerCase();
+    const targetAgent =
+      norm === 'vision' || norm === 'coder' || norm === 'cypher'
+        ? 'vision'
+        : norm === 'friday' || norm === 'writer' || norm === 'scribe' || norm === 'doc'
+          ? 'friday'
+          : norm === 'jarvis' || norm === 'inspector' || norm === 'qa'
+            ? 'jarvis'
+            : 'ultron';
+    await this._send({ action: 'wake_reply', agent: targetAgent });
+  }
+
+  async playRollCall() {
+    await this._send({ action: 'roll_call' });
   }
 
   async chime(kind = 'wake') {
@@ -467,10 +527,16 @@ export class WakeWordListener extends EventEmitter {
           this.paused = true;
           this.standbyBurst = null;
           triggeredByKws = true;
+          let targetAgent = 'ultron';
+          const kwLower = res.keyword.toLowerCase();
+          if (kwLower.includes('vision')) targetAgent = 'vision';
+          else if (kwLower.includes('friday')) targetAgent = 'friday';
+          else if (kwLower.includes('jarvis')) targetAgent = 'jarvis';
           this.emit('wake', {
             text: res.keyword.replace(/_/g, ' '),
             inlineCommand: '',
             engine: 'kws',
+            targetAgent,
           });
           break;
         }
@@ -535,19 +601,52 @@ export class WakeWordListener extends EventEmitter {
             let matchEngine = this.localStt.engineName || 'whisper';
 
             if (!isNonSpeech) {
-              // 1. Check built-in Ultron + Indian-English phonetic patterns (tuned from real logs)
-              const wakeMatch = transcript.match(
+              let targetAgent = 'ultron';
+
+              // 0. Check "Avengers assemble" / "Team assemble" / "Assemble" (Multi-Agent Roll Call)
+              const assembleMatch = transcript.match(
+                /\b(?:(?:hey|okay|ok|hi)?\s+)?(?:avengers?\s+assemble|assemble\s+the\s+team|team\s+assemble|assemble|roll\s*call)\b/i,
+              );
+              // 1. Check Agent Vision (Coding & SQL Specialist - including common accent spellings)
+              const visionMatch = transcript.match(
+                /\b(?:(?:hey|okay|ok|hi|hello)\s+)?(?:vision|vizion|vishon|vison|vishan|region|legion|vyram|revision)\b/i,
+              );
+              // 2. Check Agent Friday (Word & PDF Specialist - strict Friday words to eliminate false triggers)
+              const fridayMatch = transcript.match(
+                /\b(?:(?:hey|okay|ok|hi|hello)\s+)?(?:friday|fryday|fry\s*day)\b/i,
+              );
+              // 3. Check Agent Jarvis (QA & System Inspector Specialist)
+              const jarvisMatch = transcript.match(
+                /\b(?:(?:hey|okay|ok|hi|hello)\s+)?(?:jarvis|charvis|jarviss|jarviz|service|darvis)\b/i,
+              );
+              // 4. Check Commander Ultron
+              const ultronMatch = transcript.match(
                 /\b(?:ultron|altron|eltron|oltron|antron|electron|ultram|altram|a[\s-]+a[\s-]+tron|ultra\s*on|all\s*tron|alt\s*ron|(?:hey|here|ok|okay|we\s+are)\s*,?\s*(?:ultron|altron|tron|anton|antron|ultra\w*)|altern\w*)\b/i,
               );
-              if (wakeMatch) {
+
+              // Rank matches by position so the wake word that appears earliest (at the start of speech) wins!
+              const candidates = [];
+              if (assembleMatch) candidates.push({ agent: 'ultron', match: assembleMatch, index: assembleMatch.index, minCommandLen: 0, forceCommand: 'avengers assemble' });
+              if (visionMatch) candidates.push({ agent: 'vision', match: visionMatch, index: visionMatch.index, minCommandLen: 3 });
+              if (fridayMatch) candidates.push({ agent: 'friday', match: fridayMatch, index: fridayMatch.index, minCommandLen: 3 });
+              if (jarvisMatch) candidates.push({ agent: 'jarvis', match: jarvisMatch, index: jarvisMatch.index, minCommandLen: 3 });
+              if (ultronMatch) candidates.push({ agent: 'ultron', match: ultronMatch, index: ultronMatch.index, minCommandLen: 4 });
+
+              if (candidates.length > 0) {
+                candidates.sort((a, b) => a.index - b.index);
+                const winner = candidates[0];
                 matched = true;
-                const afterIdx = wakeMatch.index + wakeMatch[0].length;
-                const trailing = transcript
-                  .slice(afterIdx)
-                  .replace(/^[\s,.:!?-]+/, '')
-                  .trim();
-                if (trailing.length >= 4) inlineCommand = trailing;
+                targetAgent = winner.agent;
+                if (winner.forceCommand) {
+                  inlineCommand = winner.forceCommand;
+                } else {
+                  const afterIdx = winner.match.index + winner.match[0].length;
+                  const trailing = transcript.slice(afterIdx).replace(/^[\s,.:!?-]+/, '').trim();
+                  if (trailing.length >= winner.minCommandLen) inlineCommand = trailing;
+                }
               }
+
+              this._lastTargetAgent = targetAgent;
             }
 
             // 2. Check Personal Enrolled Voice Profile (Acoustic Voice Fingerprint DTW + Learned Spellings)
@@ -557,6 +656,7 @@ export class WakeWordListener extends EventEmitter {
                 matched = true;
                 inlineCommand = vp.inlineCommand || '';
                 matchEngine = vp.reason || 'voice-profile';
+                this._lastTargetAgent = vp.targetAgent || 'ultron';
               }
             }
 
@@ -570,10 +670,13 @@ export class WakeWordListener extends EventEmitter {
                 } catch {
                   // ignore
                 }
+                const targetAgent = this._lastTargetAgent || 'ultron';
+                const displayName = targetAgent.charAt(0).toUpperCase() + targetAgent.slice(1);
                 this.emit('wake', {
-                  text: isNonSpeech ? 'Hey Ultron (Voice Match)' : transcript,
+                  text: isNonSpeech ? `Hey ${displayName} (Voice Match)` : transcript,
                   inlineCommand,
                   engine: matchEngine,
+                  targetAgent,
                 });
               }
             } else if (!isNonSpeech && transcript.length >= 2) {

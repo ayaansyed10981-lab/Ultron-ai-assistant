@@ -1,10 +1,27 @@
 @echo off
-title Ultron Personal Voice Training (Windows ARM64)
+title Ultron Multi-Agent Voice Training (Windows ARM64)
 cd /d "%~dp0"
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*jarvis-assistant*src*index.js*' -or $_.CommandLine -like '*jarvis-assistant*mic_stream.ps1*' -or $_.CommandLine -like '*jarvis-assistant*tray.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
-node src/enroll_voice.js
+echo ============================================================
+echo      ULTRON MULTI-AGENT VOICE TRAINING (ARM64)
+echo ============================================================
 echo.
-echo Restarting Ultron in 24/7 background mode with your new voice profile...
-wscript.exe "%~dp0start-jarvis-background.vbs"
-echo Done! Say "Hey Ultron" anytime.
+echo Stopping any running Ultron instances to free microphone...
+taskkill /F /IM node.exe >nul 2>&1
+ping -n 2 127.0.0.1 >nul
+
+node src/enroll_voice.js %*
+
+echo.
+echo ============================================================
+echo Restarting Ultron Multi-Agent Team in background 24/7...
+wscript.exe "%~dp0start-ultron-background.vbs"
+ping -n 3 127.0.0.1 >nul
+echo.
+echo   [+] Voice training complete! Ultron is active 24/7.
+echo       - Say "Hey Ultron" for Supreme Commander
+echo       - Say "Hey Vision" for Coding and SQL
+echo       - Say "Hey Friday" for Word and PDF Documents
+echo       - Say "Hey Jarvis" for QA and Inspector
+echo ============================================================
+echo.
 pause

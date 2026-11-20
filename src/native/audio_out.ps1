@@ -83,11 +83,16 @@ function Speak-WinRT([string]$text, [string]$voice) {
     }
 }
 
-# Pre-synthesize "Yes, sir?" into RAM ONCE at startup for 0ms instant wake-word acknowledgement!
-$cachedWakeReplyBytes = $null
-try {
-    $cachedWakeReplyBytes = Synthesize-ToBytes "Yes, sir?" $DefaultVoice
-} catch {}
+# Pre-synthesize instant wake replies in distinct agent voices at startup!
+# Ultron: Mark (Male Commander), Vision: David (Male Engineer), Friday: Zira (Female Architect), Jarvis: David/QA
+$cachedUltronBytes = $null
+$cachedVisionBytes = $null
+$cachedFridayBytes = $null
+$cachedJarvisBytes = $null
+try { $cachedUltronBytes = Synthesize-ToBytes "Yes, sir?" "Mark" } catch {}
+try { $cachedVisionBytes = Synthesize-ToBytes "Yes, sir? Vision here. What are we building or querying?" "David" } catch {}
+try { $cachedFridayBytes = Synthesize-ToBytes "Yes, sir? Friday here. Which document or report shall I create?" "Zira" } catch {}
+try { $cachedJarvisBytes = Synthesize-ToBytes "Jarvis at your service, sir. What code, query, or document shall I inspect?" "David" } catch {}
 
 function Build-ToneWav([double[]]$freqs, [int]$noteMs = 55, [double]$volume = 0.16) {
     $sampleRate = 24000
@@ -155,8 +160,20 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             Emit-Json @{ id = $id; ok = $true }
             break
         } elseif ($action -eq "wake_reply") {
-            if ($null -ne $cachedWakeReplyBytes) {
-                $ms = New-Object System.IO.MemoryStream(,$cachedWakeReplyBytes)
+            $agent = [string]$req.agent
+            $streamBytes = $null
+            if ($agent -like "*vision*" -and $null -ne $cachedVisionBytes) {
+                $streamBytes = $cachedVisionBytes
+            } elseif ($agent -like "*friday*" -and $null -ne $cachedFridayBytes) {
+                $streamBytes = $cachedFridayBytes
+            } elseif ($agent -like "*jarvis*" -and $null -ne $cachedJarvisBytes) {
+                $streamBytes = $cachedJarvisBytes
+            } elseif ($null -ne $cachedUltronBytes) {
+                $streamBytes = $cachedUltronBytes
+            }
+
+            if ($null -ne $streamBytes) {
+                $ms = New-Object System.IO.MemoryStream(,$streamBytes)
                 try { Play-WavStream $ms } finally { $ms.Dispose() }
             } else {
                 Speak-WinRT "Yes, sir?" $DefaultVoice
@@ -175,6 +192,17 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             Emit-Json @{ id = $id; ok = $true }
         } elseif ($action -eq "speak") {
             Speak-WinRT $req.text $req.voice
+            Emit-Json @{ id = $id; ok = $true }
+        } elseif ($action -eq "roll_call") {
+            Speak-WinRT "Avengers assemble! Commander Ultron reporting: mission control, PC operations, and system automation online." "Mark"
+            Start-Sleep -Milliseconds 200
+            Speak-WinRT "Vision reporting, sir: software engineering, web applications, and SQL database architecture ready." "David"
+            Start-Sleep -Milliseconds 200
+            Speak-WinRT "Friday reporting, sir: executive document architecture, Word documents, and PDF reports standing by." "Zira"
+            Start-Sleep -Milliseconds 200
+            Speak-WinRT "Jarvis reporting, sir: quality assurance, deliverable verification, and system inspection at your service." "David"
+            Start-Sleep -Milliseconds 200
+            Speak-WinRT "All four operatives assembled and standing by for your command, sir. What is our objective?" "Mark"
             Emit-Json @{ id = $id; ok = $true }
         } elseif ($action -eq "chime") {
             $kind = $req.kind

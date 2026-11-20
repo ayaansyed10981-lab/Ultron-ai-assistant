@@ -1,4 +1,17 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { logger } from './logger.js';
+import {
+  getSpokenTeamIntro,
+  getVisionIntro,
+  getFridayIntro,
+  getJarvisIntro,
+  getUltronIntro,
+} from './agents/team_registry.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const AGENTS_DIR = path.join(__dirname, 'agents');
 
 const APP_KEYWORDS = [
   'google chrome',
@@ -51,40 +64,128 @@ const SITE_SHORTCUTS = {
  * Ultra-fast (<50ms) local command router for common single-intent computer actions.
  * Returns a spoken reply string if handled immediately, or null to let Gemini handle it.
  */
-export async function tryFastPath(rawText, controller) {
+export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   let text = String(rawText || '')
     .toLowerCase()
-    .replace(/^(hey\s+|ok\s+|okay\s+)?(ultron|altron|jarvis)[\s,.:!?-]*/i, '')
+    .replace(
+      /^(hey\s+|ok\s+|okay\s+|hi\s+|hello\s+)?(ultron|altron|jarvis|charvis|vision|vizion|vishon|vison|region|legion|vyram|revision|friday|fryday|coder|writer|doc|cypher|scribe)[\s,.:!?-]*/i,
+      '',
+    )
     .replace(/^(please\s+|can you\s+|could you\s+|i want you to\s+|go ahead and\s+|just\s+)/i, '')
     .replace(/[.!?]+$/g, '')
     .trim();
 
-  if (!text) return null;
+  // If the user simply said the wake name (e.g. "Hey Vision", "Hey Friday", "Hey Jarvis", "Hey Ultron"), reply instantly (<2ms)
+  if (!text) {
+    const norm = String(activeAgent || 'ultron').toLowerCase();
+    if (norm === 'vision' || norm === 'coder' || norm === 'cypher') {
+      return 'Yes, sir? Vision here. What are we building or querying?';
+    }
+    if (norm === 'friday' || norm === 'writer' || norm === 'scribe') {
+      return 'Yes, sir? Friday here. Which document or report shall I create?';
+    }
+    if (norm === 'jarvis' || norm === 'inspector' || norm === 'qa') {
+      return 'Yes, sir? Jarvis here. What code, query, or document shall I inspect?';
+    }
+    return 'Ultron online, sir. How can I assist you?';
+  }
 
-  // 0. Instant Polite Conversational Replies (< 2ms)
-  if (/^(thank you|thanks|thank you very much|thanks a lot|thank you so much|much appreciated|cheers)(\s+(ultron|buddy|pal|man))?$/.test(text)) {
+  // 0. Avengers Assemble Multi-Agent Roll Call
+  if (/\b(?:avengers?\s+assemble|team\s+assemble|assemble\s+the\s+team|assemble|roll\s*call)\b/i.test(text)) {
+    return { isRollCall: true };
+  }
+
+  // 0. Direct Agent Switching
+  if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:vision|coder|cypher)$/i.test(text) || text === 'vision' || text === 'coder') {
+    return { switchAgent: 'vision', text: 'Switching to Vision, sir. Vision standing by.' };
+  }
+  if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:friday|writer|scribe|doc|document)$/i.test(text) || text === 'friday' || text === 'writer' || text === 'doc') {
+    return { switchAgent: 'friday', text: 'Switching to Friday, sir. Friday standing by.' };
+  }
+  if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:jarvis|inspector|qa)$/i.test(text) || text === 'jarvis') {
+    return { switchAgent: 'jarvis', text: 'Switching to Jarvis, sir. Jarvis standing by for inspection.' };
+  }
+  if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:ultron|altron)$/i.test(text) || text === 'ultron') {
+    return { switchAgent: 'ultron', text: 'Ultron standing by, sir.' };
+  }
+
+  // 0.1 Specialist Agent Name Inquiries
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?coding\s+agent|who\s+is\s+(?:the\s+)?coding\s+agent|who\s+(?:does|handles)\s+(?:the\s+)?coding|coding\s+agent)\b/i.test(text)) {
+    return 'Vision is our Chief Software Engineer and SQL Database Architect, sir. You can talk to him directly anytime by saying "Hey Vision".';
+  }
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:document|word|pdf)\s+agent|who\s+is\s+(?:the\s+)?(?:document|word|pdf)\s+agent|who\s+(?:does|handles)\s+(?:the\s+)?(?:documents?|pdf|word)|document\s+agent)\b/i.test(text)) {
+    return 'Friday is our Executive Document Architect for Word and PDF documents, sir. You can talk to her directly anytime by saying "Hey Friday".';
+  }
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:checking|qa|testing|audit|inspector)\s+agent|who\s+is\s+(?:the\s+)?(?:checking|inspector|jarvis|qa)\s+agent|who\s+(?:checks|audits|inspects|tests)\s+(?:the\s+)?(?:code|apps?|docs?|sql|pdf)|checking\s+agent)\b/i.test(text)) {
+    return 'Jarvis is our Chief Quality Assurance Engineer & System Inspector, sir. He audits Vision\'s applications and SQL queries, as well as Friday\'s Word and PDF documents. You can talk to him directly by saying "Hey Jarvis".';
+  }
+
+  // 0.2 Instant Polite Conversational Replies (< 2ms)
+  if (/^(?:bye(?:\s+bye)*|goodbye|see\s+ya|see\s+you(?:\s+later)?|go\s+to\s+sleep|sleep|take\s+rest|cancel|never\s*mind|nothing|stop\s+listening|thats\s+all|that\s+is\s+all)(?:\s+(?:ultron|vision|friday|jarvis|buddy|pal|man|sir))?$/i.test(text)) {
+    return 'Standing by, sir. Let me know whenever you need me.';
+  }
+  if (/^(thank you|thanks|thank you very much|thanks a lot|thank you so much|much appreciated|cheers)(\s+(ultron|vision|friday|jarvis|coder|writer|doc|buddy|pal|man))?$/.test(text)) {
     return 'You are welcome, sir. Let me know if you need anything else.';
   }
-  if (/^(good job|nice job|great job|well done|awesome|amazing|perfect|nice work)(\s+ultron)?$/.test(text)) {
+  if (/^(good job|nice job|great job|well done|awesome|amazing|perfect|nice work)(\s+(ultron|vision|friday|jarvis))?$/.test(text)) {
     return 'Thank you, sir. Let me know if you need anything else.';
   }
-  if (/^(good morning|morning)(\s+ultron)?$/.test(text)) {
+  if (/^(good morning|morning)(\s+(ultron|vision|friday|jarvis))?$/.test(text)) {
     return 'Good morning, sir. All systems are ready whenever you need me.';
   }
-  if (/^(good afternoon|afternoon)(\s+ultron)?$/.test(text)) {
+  if (/^(good afternoon|afternoon)(\s+(ultron|vision|friday|jarvis))?$/.test(text)) {
     return 'Good afternoon, sir. How can I assist you today?';
   }
-  if (/^(good evening|evening)(\s+ultron)?$/.test(text)) {
+  if (/^(good evening|evening)(\s+(ultron|vision|friday|jarvis))?$/.test(text)) {
     return 'Good evening, sir. How may I help you tonight?';
   }
-  if (/^(good night|goodnight|night)(\s+ultron)?$/.test(text)) {
+  if (/^(good night|goodnight|night)(\s+(ultron|vision|friday|jarvis))?$/.test(text)) {
     return 'Good night, sir. I will remain on standby if you need anything.';
   }
   if (/^(how are you|how are you doing|how'?s it going|you good)$/.test(text)) {
     return 'Operating at peak efficiency, sir. Let me know what you need.';
   }
-  if (/^(who are you|what is your name|what can you do|help me)$/.test(text)) {
-    return 'I am Ultron, your personal AI assistant, sir. I can control your computer, write and launch complete code projects, check weather, manage notes, adjust brightness and volume, set timers, and see your screen.';
+  if (/\b(?:who\s+(?:is\s+)?in\s+your\s+team|is\s+in\s+your\s+team|in\s+your\s+team|your\s+team|about\s+your\s+team|who\s+are\s+your\s+agents|tell\s+me\s+about\s+your\s+team|introduce\s+your\s+team|meet\s+your\s+team|what\s+is\s+your\s+team|your\s+agents)\b/i.test(text)) {
+    return getSpokenTeamIntro();
+  }
+  if (/\b(?:open\s+(?:my\s+)?agents?\s+folder|show\s+(?:my\s+)?agents?|view\s+(?:my\s+)?agents?|where\s+are\s+(?:my\s+)?agents?|open\s+team\s+folder)\b/i.test(text)) {
+    await controller.executeTool('open_app', { app: 'explorer.exe', arguments: `"${AGENTS_DIR}"` });
+    return 'Opening your agents folder in File Explorer, sir.';
+  }
+  if (
+    /^(who are you|who is this|what is your name|what can you do|help me|introduce yourself|tell me about yourself|what do you do|what is your role|what are your skills|what are you)$/i.test(
+      text,
+    )
+  ) {
+    const norm = String(activeAgent || 'ultron').toLowerCase();
+    if (norm === 'vision' || norm === 'coder' || norm === 'cypher') return getVisionIntro();
+    if (norm === 'friday' || norm === 'writer' || norm === 'scribe' || norm === 'doc') return getFridayIntro();
+    if (norm === 'jarvis' || norm === 'inspector' || norm === 'qa') return getJarvisIntro();
+    return getUltronIntro();
+  }
+
+  // 0.3 Quick Project & Document Folders
+  if (/^(?:open\s+)?(?:vs\s*code|vscode|code|visual\s*studio\s*code)$/i.test(text)) {
+    await controller.executeTool('open_app', { app: 'code.cmd' });
+    return 'Opening VS Code, sir.';
+  }
+  if (/^(?:open\s+)?(?:word|microsoft\s*word|ms\s*word)$/i.test(text)) {
+    await controller.executeTool('open_app', { app: 'winword.exe' });
+    return 'Opening Microsoft Word, sir.';
+  }
+  if (/^(?:open\s+)?(?:projects|my\s*projects|ultron\s*projects|code\s*folder)$/i.test(text)) {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const p = path.join(os.homedir(), 'UltronProjects');
+    await controller.executeTool('open_app', { app: 'explorer.exe', arguments: `"${p}"` });
+    return 'Opening your projects folder in File Explorer, sir.';
+  }
+  if (/^(?:open\s+)?(?:documents|my\s*documents|ultron\s*documents|doc\s*folder)$/i.test(text)) {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const p = path.join(os.homedir(), 'UltronDocuments');
+    await controller.executeTool('open_app', { app: 'explorer.exe', arguments: `"${p}"` });
+    return 'Opening your documents folder in File Explorer, sir.';
   }
 
   // Do NOT intercept multi-step commands ("open notepad and type...") — let Gemini chain those

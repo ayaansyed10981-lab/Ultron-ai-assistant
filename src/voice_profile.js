@@ -243,88 +243,216 @@ export function normalizePhrase(text) {
 export class VoiceProfileManager {
   constructor() {
     this.profile = null;
+    this.agents = {};
   }
 
   load() {
     try {
       if (!fs.existsSync(VOICE_PROFILE_PATH)) {
         this.profile = null;
+        this.agents = {};
         return false;
       }
       const raw = JSON.parse(fs.readFileSync(VOICE_PROFILE_PATH, 'utf8'));
-      if (raw && Array.isArray(raw.templates) && raw.templates.length > 0) {
+      if (!raw) {
+        this.profile = null;
+        this.agents = {};
+        return false;
+      }
+
+      this.agents = {};
+
+      // Multi-agent format (v2)
+      if (raw.agents && typeof raw.agents === 'object' && Object.keys(raw.agents).length > 0) {
+        for (const [key, val] of Object.entries(raw.agents)) {
+          if (val && Array.isArray(val.templates) && val.templates.length > 0) {
+            this.agents[key.toLowerCase()] = {
+              name: val.name || key,
+              wakeWord: val.wakeWord || `Hey ${key.charAt(0).toUpperCase() + key.slice(1)}`,
+              sampleCount: val.sampleCount || val.templates.length,
+              avgIntraDistance: val.avgIntraDistance || 0.1,
+              threshold: val.threshold || 0.13,
+              learnedPhrases: Array.isArray(val.learnedPhrases) ? val.learnedPhrases : [],
+              templates: val.templates,
+            };
+          }
+        }
+      }
+
+      // Legacy single-agent fallback (v1)
+      if (Object.keys(this.agents).length === 0 && Array.isArray(raw.templates) && raw.templates.length > 0) {
+        this.agents.ultron = {
+          name: 'Ultron',
+          wakeWord: raw.wakeWord || 'Hey Ultron',
+          sampleCount: raw.sampleCount || raw.templates.length,
+          avgIntraDistance: raw.avgIntraDistance || 0.1,
+          threshold: raw.threshold || 0.13,
+          learnedPhrases: Array.isArray(raw.learnedPhrases) ? raw.learnedPhrases : [],
+          templates: raw.templates,
+        };
+      }
+
+      if (Object.keys(this.agents).length > 0) {
         this.profile = raw;
-        logger.info(
-          `Loaded personal voice profile (${raw.templates.length} voice samples, ${raw.learnedPhrases?.length || 0} personalized phrases, threshold ${raw.threshold?.toFixed(3)}).`,
-        );
+        const agentSummary = Object.entries(this.agents)
+          .map(([k, v]) => `${v.name || k}: ${v.templates.length} samples, ${v.learnedPhrases.length} phrases`)
+          .join(' | ');
+        logger.info(`Loaded multi-agent voice profiles [${agentSummary}].`);
         return true;
       }
     } catch (err) {
       logger.warn(`Failed to load voice profile: ${err.message}`);
     }
     this.profile = null;
+    this.agents = {};
     return false;
   }
 
+  saveAgent(agentKey, agentData) {
+    fs.mkdirSync(VOICE_PROFILE_DIR, { recursive: true });
+    const normKey = String(agentKey || 'ultron').toLowerCase();
+    let current = {};
+    try {
+      if (fs.existsSync(VOICE_PROFILE_PATH)) {
+        current = JSON.parse(fs.readFileSync(VOICE_PROFILE_PATH, 'utf8')) || {};
+      }
+    } catch {}
+
+    current.version = 2;
+    current.updatedAt = new Date().toISOString();
+    current.agents = current.agents || {};
+    current.agents[normKey] = agentData;
+
+    // Maintain top-level fields from Ultron (or first agent) for legacy tools
+    const primary = current.agents.ultron || agentData;
+    if (primary) {
+      current.wakeWord = primary.wakeWord || 'Hey Ultron';
+      current.templates = primary.templates || [];
+      current.learnedPhrases = primary.learnedPhrases || [];
+      current.threshold = primary.threshold || 0.13;
+      current.sampleCount = primary.sampleCount || primary.templates?.length || 0;
+    }
+
+    fs.writeFileSync(VOICE_PROFILE_PATH, JSON.stringify(current, null, 2), 'utf8');
+    return this.load();
+  }
+
+  saveAll(agentsMap) {
+    fs.mkdirSync(VOICE_PROFILE_DIR, { recursive: true });
+    let current = {};
+    try {
+      if (fs.existsSync(VOICE_PROFILE_PATH)) {
+        current = JSON.parse(fs.readFileSync(VOICE_PROFILE_PATH, 'utf8')) || {};
+      }
+    } catch {}
+
+    current.version = 2;
+    current.updatedAt = new Date().toISOString();
+    current.agents = current.agents || {};
+
+    for (const [key, data] of Object.entries(agentsMap)) {
+      current.agents[key.toLowerCase()] = data;
+    }
+
+    const primary = current.agents.ultron || Object.values(current.agents)[0];
+    if (primary) {
+      current.wakeWord = primary.wakeWord || 'Hey Ultron';
+      current.templates = primary.templates || [];
+      current.learnedPhrases = primary.learnedPhrases || [];
+      current.threshold = primary.threshold || 0.13;
+      current.sampleCount = primary.sampleCount || primary.templates?.length || 0;
+    }
+
+    fs.writeFileSync(VOICE_PROFILE_PATH, JSON.stringify(current, null, 2), 'utf8');
+    return this.load();
+  }
+
   save(profileData) {
+    // If incoming profileData is legacy format without agents, wrap as ultron
+    if (!profileData.agents && Array.isArray(profileData.templates)) {
+      this.saveAgent('ultron', {
+        name: 'Ultron',
+        wakeWord: profileData.wakeWord || 'Hey Ultron',
+        sampleCount: profileData.sampleCount || profileData.templates.length,
+        avgIntraDistance: profileData.avgIntraDistance || 0.1,
+        threshold: profileData.threshold || 0.13,
+        learnedPhrases: profileData.learnedPhrases || [],
+        templates: profileData.templates,
+      });
+      return;
+    }
     fs.mkdirSync(VOICE_PROFILE_DIR, { recursive: true });
     fs.writeFileSync(VOICE_PROFILE_PATH, JSON.stringify(profileData, null, 2), 'utf8');
-    this.profile = profileData;
+    this.load();
   }
 
   /**
-   * Check whether a spoken burst matches the user's enrolled voice OR personalized Whisper spellings
+   * Check whether a spoken burst matches any enrolled agent's voice OR personalized Whisper spellings
    */
   matchUtterance(samples, transcript = '') {
-    if (!this.profile) return { matched: false };
+    if (!this.profile || Object.keys(this.agents).length === 0) return { matched: false };
 
     const normText = normalizePhrase(transcript);
 
-    // 1. Check exact personalized Whisper spellings learned during enrollment (e.g., "here tron", "hey anton")
-    if (normText && Array.isArray(this.profile.learnedPhrases)) {
-      for (const phrase of this.profile.learnedPhrases) {
-        if (!phrase || phrase.length < 4) continue;
-        if (normText === phrase || normText.startsWith(`${phrase} `) || normText.includes(` ${phrase}`)) {
-          const idx = normText.indexOf(phrase);
-          const trailing = normText.slice(idx + phrase.length).trim();
-          return {
-            matched: true,
-            reason: `learned-phrase:"${phrase}"`,
-            inlineCommand: trailing.length >= 4 ? trailing : '',
-          };
+    // 1. Check personalized Whisper spellings learned during enrollment for each agent
+    if (normText) {
+      for (const [agentKey, agentData] of Object.entries(this.agents)) {
+        if (!Array.isArray(agentData.learnedPhrases)) continue;
+        for (const phrase of agentData.learnedPhrases) {
+          if (!phrase || phrase.length < 3) continue;
+          if (normText === phrase || normText.startsWith(`${phrase} `) || normText.includes(` ${phrase}`)) {
+            const idx = normText.indexOf(phrase);
+            const trailing = normText.slice(idx + phrase.length).trim();
+            return {
+              matched: true,
+              targetAgent: agentKey,
+              reason: `learned-phrase[${agentKey}]:"${phrase}"`,
+              inlineCommand: trailing.length >= 3 ? trailing : '',
+            };
+          }
         }
       }
     }
 
-    // 2. Check acoustic Voice Fingerprint (DTW against the user's own enrolled "Hey Ultron" recordings)
-    // Strict duration (0.45s - 1.9s) and word-count (<= 3 words) guard prevents false triggers on laughs or sentences!
+    // 2. Check acoustic Voice Fingerprint (DTW against enrolled recordings for each agent)
     const wordCount = normText ? normText.split(' ').length : 0;
     const isShortWakeLength =
       samples &&
       samples.length >= SAMPLE_RATE * 0.45 &&
-      samples.length <= SAMPLE_RATE * 1.9 &&
-      wordCount <= 3 &&
+      samples.length <= SAMPLE_RATE * 2.2 &&
+      wordCount <= 4 &&
       !/^(haha|ha|yeah|yes|no|ok|okay|bye|hi|hello|wow|wait|sorry)$/.test(normText);
 
-    if (isShortWakeLength && Array.isArray(this.profile.templates)) {
+    if (isShortWakeLength) {
       const feats = extractVoiceFeatures(samples);
       if (feats) {
+        let bestAgent = null;
         let bestDist = Infinity;
-        for (const tmpl of this.profile.templates) {
-          const d = dtwDistance(feats, tmpl);
-          if (d < bestDist) bestDist = d;
+        let matchedThresh = 0.135;
+
+        for (const [agentKey, agentData] of Object.entries(this.agents)) {
+          if (!Array.isArray(agentData.templates) || agentData.templates.length === 0) continue;
+          const thresh = Math.min(0.138, agentData.threshold || 0.13);
+          for (const tmpl of agentData.templates) {
+            const d = dtwDistance(feats, tmpl);
+            if (d < bestDist) {
+              bestDist = d;
+              bestAgent = agentKey;
+              matchedThresh = thresh;
+            }
+          }
         }
-        // Strict cap at 0.135 so unrelated speech (dist ~0.18-0.28) NEVER false-triggers!
-        const thresh = Math.min(0.135, this.profile.threshold || 0.13);
-        if (bestDist <= thresh) {
+
+        if (bestAgent && bestDist <= matchedThresh) {
           return {
             matched: true,
-            reason: `voice-fingerprint(dist=${bestDist.toFixed(3)}<=${thresh.toFixed(3)})`,
+            targetAgent: bestAgent,
+            reason: `voice-fingerprint[${bestAgent}](dist=${bestDist.toFixed(3)}<=${matchedThresh.toFixed(3)})`,
             distance: bestDist,
             inlineCommand: '',
           };
         }
-        return { matched: false, distance: bestDist };
+        return { matched: false, distance: bestDist, closestAgent: bestAgent };
       }
     }
 

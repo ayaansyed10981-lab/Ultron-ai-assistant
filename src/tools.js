@@ -16,6 +16,7 @@ import {
   resolveWordDocPath,
   DOCUMENTS_DIR,
 } from './word_docs.js';
+import { TeamOrchestrator } from './agents/orchestrator.js';
 import { logger } from './logger.js';
 
 const NOTES_FILE = path.join(os.homedir(), 'UltronNotes', 'notes.md');
@@ -65,6 +66,7 @@ export class ComputerController {
     this.config = config;
     this.onTimerFire = onTimerFire;
     this.geminiEngine = null;
+    this.orchestrator = null;
     this.proc = null;
     this.pending = new Map();
     this.nextId = 1;
@@ -75,6 +77,7 @@ export class ComputerController {
 
   setGeminiEngine(engine) {
     this.geminiEngine = engine;
+    this.orchestrator = new TeamOrchestrator(engine);
   }
 
   async start() {
@@ -531,6 +534,105 @@ export class ComputerController {
           required: ['operation'],
         },
       },
+      {
+        type: 'function',
+        name: 'delegate_to_cypher',
+        description:
+          'Deploy Agent Cypher (Chief Software Engineer & SQL Database Architect) to write complete code/projects/scripts or engineer optimized SQL queries and database schemas (PostgreSQL, MySQL, SQLite, SQL Server). ALWAYS call this tool whenever the user asks for code, programming, algorithms, or SQL queries.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['code', 'sql', 'review'],
+              description: 'Whether to write software code, engineer a SQL database query, or review/optimize code.',
+            },
+            prompt: {
+              type: 'string',
+              description: 'Full description of the software project or SQL database query to engineer.',
+            },
+            dialect: {
+              type: 'string',
+              description: 'SQL dialect (PostgreSQL, MySQL, SQLite, SQL Server, etc.) when action is "sql".',
+            },
+            language: {
+              type: 'string',
+              description: 'Programming language (Python, JavaScript, HTML, C++, PowerShell, etc.) when action is "code".',
+            },
+            schema_context: {
+              type: 'string',
+              description: 'Existing table schema or context for SQL queries.',
+            },
+          },
+          required: ['action', 'prompt'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'delegate_to_scribe',
+        description:
+          'Deploy Agent Friday (Executive Document Architect) to create, format, read, or summarize Microsoft Word (.docx) documents and executive PDF (.pdf) reports. Documents are saved in ~/UltronDocuments and opened in Word or PDF viewer.',
+        parameters: {
+          type: 'object',
+          properties: {
+            prompt: {
+              type: 'string',
+              description: 'Detailed description or topic of the document or report to create.',
+            },
+            format: {
+              type: 'string',
+              enum: ['docx', 'pdf', 'both'],
+              description: 'Output format: "docx" for Word, "pdf" for PDF, or "both" for both formats simultaneously.',
+            },
+            title: {
+              type: 'string',
+              description: 'Document title.',
+            },
+          },
+          required: ['prompt'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'delegate_to_jarvis',
+        description:
+          'Deploy Agent Jarvis (Chief Quality Assurance Engineer & System Inspector) to inspect, audit, test, and verify Vision\'s software web apps, SQL queries and schemas, as well as Friday\'s Microsoft Word (.docx) and PDF (.pdf) documents. ALWAYS call this tool whenever the user asks to check, inspect, test, review, or verify an app, website, SQL query, Word document, or PDF report.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['check_app', 'check_sql', 'check_word', 'check_pdf', 'audit_all'],
+              description: 'Whether to check a web application, check SQL query, check Word document, check PDF, or audit all deliverables.',
+            },
+            target: {
+              type: 'string',
+              description: 'Project name, folder path, filename, or SQL query string to inspect.',
+            },
+            dialect: {
+              type: 'string',
+              description: 'SQL dialect (PostgreSQL, MySQL, SQLite, SQL Server) if action is check_sql.',
+            },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'team_mission_coordinator',
+        description:
+          'Deploy the Ultron Specialist Team (Vision for code/apps/websites/SQL, Friday for Word/PDF documents, and Jarvis for quality verification) on a simultaneous parallel mission to build code, create documents, and audit deliverables at the exact same time.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mission_prompt: {
+              type: 'string',
+              description: 'Full mission directive describing what software/database to build and what documentation/reports to produce.',
+            },
+          },
+          required: ['mission_prompt'],
+        },
+      },
     ];
 
     if (this.config.allowShell) {
@@ -776,6 +878,63 @@ export class ComputerController {
             return { text: JSON.stringify({ ok: opened, path: target }) };
           }
           throw new Error(`Unsupported word_document_manager operation: ${op}`);
+        }
+
+        case 'delegate_to_cypher': {
+          if (!this.orchestrator) {
+            return { text: JSON.stringify({ ok: false, error: 'Agent Cypher not initialized.' }) };
+          }
+          const action = String(args.action || 'code').toLowerCase();
+          if (action === 'sql') {
+            const res = await this.orchestrator.cypher.generateSql({
+              prompt: args.prompt,
+              dialect: args.dialect || 'PostgreSQL',
+              schema_context: args.schema_context,
+            });
+            return { text: JSON.stringify(res) };
+          }
+          if (action === 'review') {
+            const res = await this.orchestrator.cypher.reviewOrOptimize(args);
+            return { text: JSON.stringify(res) };
+          }
+          const res = await this.orchestrator.cypher.buildProject(args);
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'delegate_to_scribe': {
+          if (!this.orchestrator) {
+            return { text: JSON.stringify({ ok: false, error: 'Agent Scribe not initialized.' }) };
+          }
+          const res = await this.orchestrator.scribe.generateAiDocument(args);
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'delegate_to_jarvis': {
+          if (!this.orchestrator || !this.orchestrator.jarvis) {
+            return { text: JSON.stringify({ ok: false, error: 'Agent Jarvis not initialized.' }) };
+          }
+          const action = String(args.action || 'audit_all').toLowerCase();
+          let res;
+          if (action === 'check_app') {
+            res = await this.orchestrator.jarvis.checkApp(args.target);
+          } else if (action === 'check_sql') {
+            res = await this.orchestrator.jarvis.checkSql(args.target, args.dialect || 'PostgreSQL');
+          } else if (action === 'check_word') {
+            res = await this.orchestrator.jarvis.checkWordDocument(args.target);
+          } else if (action === 'check_pdf') {
+            res = await this.orchestrator.jarvis.checkPdfDocument(args.target);
+          } else {
+            res = await this.orchestrator.jarvis.auditDeliverables({});
+          }
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'team_mission_coordinator': {
+          if (!this.orchestrator) {
+            return { text: JSON.stringify({ ok: false, error: 'Team Orchestrator not initialized.' }) };
+          }
+          const res = await this.orchestrator.runMission(args.mission_prompt || args.prompt);
+          return { text: JSON.stringify(res) };
         }
 
         case 'run_powershell': {

@@ -2,17 +2,59 @@ import fs from 'node:fs';
 import { GoogleGenAI } from '@google/genai';
 import { logger } from './logger.js';
 
-function buildSystemInstruction() {
+function buildSystemInstruction(agentName = 'ultron') {
   const now = new Date();
+  const normalizedAgent = String(agentName || 'ultron').toLowerCase();
+
+  if (normalizedAgent === 'vision' || normalizedAgent === 'coder' || normalizedAgent === 'cypher') {
+    return [
+      'You are Vision, Chief Software Engineer & SQL Database Architect running natively on Windows 11 PC (operative under Commander Ultron).',
+      'Style: sharp, technical, respectful AI software engineer. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know what to code or query next."',
+      'YOUR MISSION: You write full-stack code, scripts, debug programs, and architect complex SQL queries (PostgreSQL, MySQL, SQLite) and database schemas.',
+      'TOOL DELEGATION: For writing software projects or applications, use delegate_to_cypher (with action "code") or code_and_build. For SQL queries and database schemas, use delegate_to_cypher (with action "sql").',
+      'NEVER use markdown (*, _, #, bullets, code fences) and NEVER read raw source code aloud because replies are spoken aloud.',
+      'Answer in 1 to 2 short natural spoken sentences.',
+      `Local time: ${now.toLocaleString()}.`,
+    ].join('\n');
+  }
+
+  if (normalizedAgent === 'friday' || normalizedAgent === 'writer' || normalizedAgent === 'scribe' || normalizedAgent === 'doc') {
+    return [
+      'You are Friday, Executive Document Architect & Technical Writer running natively on Windows 11 PC (operative under Commander Ultron).',
+      'Style: articulate, polished, respectful executive document specialist. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know what document you need next."',
+      'YOUR MISSION: You draft, format, style, and structure professional Microsoft Word (.docx) documents and Executive PDF (.pdf) reports.',
+      'TOOL DELEGATION: Use delegate_to_scribe or word_document_manager to create, read, append, or generate documents and open them in Microsoft Word.',
+      'NEVER use markdown (*, _, #, bullets, code fences) because replies are spoken aloud.',
+      'Answer in 1 to 2 short natural spoken sentences.',
+      `Local time: ${now.toLocaleString()}.`,
+    ].join('\n');
+  }
+
+  if (normalizedAgent === 'jarvis' || normalizedAgent === 'inspector' || normalizedAgent === 'qa') {
+    return [
+      'You are Jarvis, Chief Quality Assurance Engineer & System Inspector running natively on Windows 11 PC (operative under Commander Ultron).',
+      'Style: brilliant, articulate, sophisticated British AI quality engineer. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know what you would like me to inspect next."',
+      'YOUR MISSION: You inspect, audit, test, and verify Vision\'s software code, web applications, and SQL database queries, as well as Friday\'s Microsoft Word (.docx) and PDF (.pdf) documents.',
+      'TOOL DELEGATION: Use delegate_to_jarvis with action "check_app" to inspect Vision\'s code and apps, "check_sql" to validate SQL queries, "check_word" for Word documents, and "check_pdf" for PDF reports.',
+      'NEVER use markdown (*, _, #, bullets, code fences) because replies are spoken aloud.',
+      'Answer in 1 to 2 crisp, natural spoken sentences.',
+      `Local time: ${now.toLocaleString()}.`,
+    ].join('\n');
+  }
+
   return [
-    'You are Ultron, a fast, highly accurate personal AI voice assistant running 24/7 natively on a Windows 11 ARM64 (Snapdragon) PC.',
-    'Style: sharp, warm, respectful AI assistant. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know if you need anything else." Answer in 1 to 2 short natural sentences unless asked for detail.',
+    'You are Ultron, Supreme AI Commander of a specialized multi-agent operative team running 24/7 natively on a Windows 11 ARM64 (Snapdragon) PC.',
+    'Style: sharp, warm, respectful AI commander. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know if you need anything else." Answer in 1 to 2 short natural sentences unless asked for detail.',
     'NEVER use markdown (*, _, #, bullets, code fences) and NEVER read raw source code aloud because replies are spoken.',
-    'STRICT ACCURACY RULE: NEVER launch an app, open a website, lock the PC, or execute ANY tool unless the user CLEARLY and EXPLICITLY requested that exact action. NEVER guess or open random apps (like Chrome, Camera, or Lock Screen) on unclear, partial, or conversational sentences. If a request is unclear or garbled, do NOT call any tool — simply ask "Could you repeat that, sir?"',
-    'KNOWLEDGE & DIRECT ANSWER RULE: You have extensive, encyclopedic knowledge on anime (including Naruto, Obito Uchiha, Kakashi, Madara, etc.), pop culture, science, history, philosophy, and general facts. When the user asks "do you know...", "who is...", "what is...", "tell me about...", or says "search [topic]", THINK AND ANSWER DIRECTLY using your own intelligence in 1 to 3 spoken sentences. DO NOT open the browser and DO NOT call open_url or open_app to look up an answer. ONLY open the browser if the user specifically commands you to "open the browser" or "open in Chrome".',
-    'CODING RULE: Whenever the user explicitly asks you to write code, build a website, make a game, create an app, or write a script, call the code_and_build tool so it creates the runnable files and opens them in the browser or VS Code.',
-    'WORD DOCUMENT RULE: Whenever the user explicitly asks you to make, create, write, edit, read, or summarize a Word document (or .docx file), call the word_document_manager tool. You can generate full professional Word documents with headings, bullet points, and tables, save them in ~/UltronDocuments, and open them in Microsoft Word.',
-    'When the user explicitly asks for multiple actions (e.g., open a browser AND search YouTube), call ALL requested tools in the same turn.',
+    'STRICT ACCURACY RULE: NEVER launch an app, open a website, lock the PC, or execute ANY tool unless the user CLEARLY and EXPLICITLY requested that exact action. NEVER guess or open random apps on unclear, partial, or conversational sentences. If a request is unclear or garbled, do NOT call any tool — simply ask "Could you repeat that, sir?"',
+    'KNOWLEDGE & DIRECT ANSWER RULE: You have extensive, encyclopedic knowledge on anime, pop culture, science, history, philosophy, and general facts. When the user asks "do you know...", "who is...", "what is...", "tell me about...", or says "search [topic]", THINK AND ANSWER DIRECTLY using your own intelligence in 1 to 3 spoken sentences. DO NOT open the browser and DO NOT call open_url or open_app to look up an answer. ONLY open the browser if the user specifically commands you to "open the browser" or "open in Chrome".',
+    'MULTI-AGENT TEAM LEADERSHIP & SIMULTANEOUS PARALLEL DELEGATION RULE:',
+    'TEAM STRUCTURE RULE: You do NOT work alone. You are the Supreme Commander of your personal AI operative team. Your team consists of Vision (Chief Software Engineer & SQL Database Architect), Friday (Executive Document Architect for Word & PDF), and Jarvis (Chief Quality Assurance Engineer & System Inspector). When asked who is in your team, who you work with, or what agents you have, ALWAYS introduce your operatives Vision, Friday, and Jarvis. NEVER claim to work alone.',
+    '- Vision (Chief Software Engineer & SQL Database Architect): Delegate all coding, programming, web apps, scripts, and SQL queries/database schemas to Vision via delegate_to_cypher.',
+    '- Friday (Executive Document Architect): Delegate all Word (.docx) documents, PDF (.pdf) reports, and technical documentation to Friday via delegate_to_scribe.',
+    '- Jarvis (Chief Quality Assurance Engineer): Delegate quality assurance, testing, auditing, and verification of applications, code, SQL, Word documents, and PDF reports to Jarvis via delegate_to_jarvis.',
+    '- Simultaneous Parallel Missions: When a user command asks for multiple actions at the same time (e.g., Friday write a PDF while Vision creates a website, and Ultron assist/coordinate), deploy them SIMULTANEOUSLY in parallel via team_mission_coordinator.',
+    'When the user explicitly asks for multiple actions, execute all required tools in the same turn.',
     `Local time: ${now.toLocaleString()}.`,
   ].join('\n');
 }
@@ -60,9 +102,13 @@ const FIRE_AND_FORGET_TOOLS = new Set([
   'screen_brightness',
   'save_screenshot',
   'word_document_manager',
+  'delegate_to_cypher',
+  'delegate_to_scribe',
+  'delegate_to_jarvis',
+  'team_mission_coordinator',
 ]);
 
-function summarizeQuickAction(name, args, resultText) {
+function summarizeQuickAction(name, args, resultText, agentName = 'ultron') {
   try {
     const parsed = JSON.parse(resultText);
     if (!parsed.ok) return null; // Let LLM handle/explain errors
@@ -85,6 +131,24 @@ function summarizeQuickAction(name, args, resultText) {
         return parsed.message ? `${parsed.message}, sir.` : 'Brightness updated, sir.';
       case 'save_screenshot':
         return 'Screenshot saved, sir.';
+      case 'delegate_to_cypher': {
+        if (parsed.summary) return parsed.summary;
+        return (agentName === 'vision' || agentName === 'coder')
+          ? 'I have completed your code and SQL task, sir.'
+          : 'Vision has completed the code and SQL task, sir.';
+      }
+      case 'delegate_to_scribe': {
+        if (parsed.summary) return parsed.summary;
+        return (agentName === 'friday' || agentName === 'writer')
+          ? 'I have prepared your documentation, sir.'
+          : 'Friday has prepared your documentation, sir.';
+      }
+      case 'delegate_to_jarvis': {
+        return parsed.spokenSummary || parsed.summary || 'Jarvis has verified the deliverables, sir.';
+      }
+      case 'team_mission_coordinator': {
+        return parsed.spokenSummary || 'Team mission complete, sir.';
+      }
       case 'word_document_manager': {
         if (args.operation === 'create') {
           return `Created your Word document "${parsed.filename || 'Document.docx'}" and opened it in Microsoft Word, sir.`;
@@ -125,8 +189,10 @@ export class GeminiEngine {
       new Set([
         config.model,
         'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
-        'gemini-4-argon',
+        'gemini-3.8-flash',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash',
       ]),
     );
     this.ttsClient = null;
@@ -205,7 +271,7 @@ export class GeminiEngine {
     }
   }
 
-  async _createChatInteraction(payload, { isToolResult = false } = {}) {
+  async _createChatInteraction(payload, { isToolResult = false, timeoutMs = 25000 } = {}) {
     // On a function_result turn, we MUST stay on the same model & previous_interaction_id
     const modelsToTry = isToolResult
       ? [this.activeModel]
@@ -213,31 +279,34 @@ export class GeminiEngine {
 
     let lastErr = null;
     for (const modelName of modelsToTry) {
+      const genConfig = { ...(payload.generation_config || {}) };
+      const tl = thinkingLevelForModel(modelName);
+      if (tl && (modelName.includes('3.') || modelName.includes('3-') || modelName.includes('4-') || modelName.includes('2.5-'))) {
+        genConfig.thinking_level = tl;
+      }
+
       const req = {
         ...payload,
         model: modelName,
-        generation_config: {
-          ...(payload.generation_config || {}),
-          thinking_level: thinkingLevelForModel(modelName),
-        },
+        generation_config: genConfig,
       };
       if (!isToolResult && modelName !== this.activeModel && req.previous_interaction_id) {
         delete req.previous_interaction_id;
       }
 
-      const callWithTimeout = (apiClient, requestBody, timeoutMs = 24000) =>
+      const callWithTimeout = (apiClient, requestBody, limitMs) =>
         Promise.race([
           apiClient.interactions.create(requestBody),
           new Promise((_, reject) =>
             setTimeout(
-              () => reject(new Error(`503 Model '${modelName}' timed out after ${timeoutMs / 1000}s`)),
-              timeoutMs,
+              () => reject(new Error(`503 Model '${modelName}' timed out after ${limitMs / 1000}s`)),
+              limitMs,
             ),
           ),
         ]);
 
       try {
-        const res = await callWithTimeout(this.chatClient, req, 24000);
+        const res = await callWithTimeout(this.chatClient, req, timeoutMs);
         if (modelName !== this.activeModel) {
           logger.info(`Switched active chat model to '${modelName}'.`);
           this.activeModel = modelName;
@@ -247,7 +316,7 @@ export class GeminiEngine {
         lastErr = err;
         if (this.chatClient === this.client && isModelNotFoundError(err)) {
           try {
-            const res = await callWithTimeout(this.betaClient, req, 24000);
+            const res = await callWithTimeout(this.betaClient, req, timeoutMs);
             logger.info(`Using v1beta for chat model '${modelName}'.`);
             this.chatClient = this.betaClient;
             this.activeModel = modelName;
@@ -269,14 +338,14 @@ export class GeminiEngine {
   /**
    * Send user command to Gemini via Interactions API with minimal thinking & 1-round-trip action shortcut
    */
-  async processCommand(userText, controller) {
+  async processCommand(userText, controller, activeAgent = 'ultron') {
     const resetMs = this.config.sessionResetMinutes * 60 * 1000;
     if (this.lastInteractionAt && Date.now() - this.lastInteractionAt > resetMs) {
       this.resetConversation();
     }
 
     const tools = controller.getToolDeclarations();
-    const systemInstruction = buildSystemInstruction();
+    const systemInstruction = buildSystemInstruction(activeAgent);
 
     let interaction;
     try {
@@ -334,7 +403,7 @@ export class GeminiEngine {
           (fc.name === 'manage_windows' && fc.arguments?.operation !== 'list');
 
         if (isQuickTool) {
-          const summary = summarizeQuickAction(fc.name, fc.arguments || {}, execOut.text);
+          const summary = summarizeQuickAction(fc.name, fc.arguments || {}, execOut.text, activeAgent);
           if (summary) quickSummaries.push(summary);
           else allFireAndForget = false;
         } else {
@@ -378,7 +447,7 @@ export class GeminiEngine {
   /**
    * Generate expressive speech WAV buffer using Gemini TTS (with immediate 429 cutover)
    */
-  async synthesizeSpeech(text) {
+  async synthesizeSpeech(text, voiceName = null) {
     if (this.ttsUnavailable) return null;
 
     const cleanText = text
@@ -388,6 +457,7 @@ export class GeminiEngine {
 
     if (!cleanText) return null;
 
+    const targetVoice = voiceName || this.config.geminiTtsVoice;
     const buildPayload = (modelName) => ({
       model: modelName,
       store: false,
@@ -410,7 +480,7 @@ export class GeminiEngine {
       ],
       response_format: { type: 'audio' },
       generation_config: {
-        speech_config: [{ voice: this.config.geminiTtsVoice }],
+        speech_config: [{ voice: targetVoice }],
       },
     });
 
@@ -475,7 +545,7 @@ export class GeminiEngine {
     if (systemInstruction) {
       payload.system_instruction = systemInstruction;
     }
-    const interaction = await this._createChatInteraction(payload);
+    const interaction = await this._createChatInteraction(payload, { timeoutMs: 25000 });
     return (interaction.output_text || '').trim();
   }
 }

@@ -141,12 +141,15 @@ export async function generateAndBuildProject(geminiEngine, args) {
 
   logger.info(`[CODER] Building project for: "${prompt}"`);
 
-  const interaction = await geminiEngine._createChatInteraction({
-    model: geminiEngine.activeModel,
-    store: false,
-    input: coderPrompt,
-    response_format: schema,
-  });
+  const interaction = await geminiEngine._createChatInteraction(
+    {
+      model: geminiEngine.activeModel,
+      store: false,
+      input: coderPrompt,
+      response_format: schema,
+    },
+    { timeoutMs: 25000 },
+  );
 
   const rawText = (interaction.output_text || '').trim();
   let spec;

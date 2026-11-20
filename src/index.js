@@ -100,6 +100,7 @@ class JarvisDaemon {
     this.controller = new ComputerController(config, (label) => this.handleTimerFired(label));
     this.controller.setGeminiEngine(this.gemini);
 
+    this.activeAgent = 'ultron';
     this.busy = false;
     this.muted = false;
     this.shuttingDown = false;
@@ -145,14 +146,15 @@ class JarvisDaemon {
     // Wire 24/7 Offline Neural Wake-Word Listener events
     this.wakeListener.on('ready', (info) => {
       logger.info(
-        `Offline neural wake-word engine active (${info.words.join(', ')}). Standing by 24/7.`,
+        `Offline neural wake-word engine active (${info.words.join(', ')}). Standing by 24/7 for Ultron, Vision, and Friday.`,
       );
-      this.tray.setStatus('idle', 'Ultron - Listening for "Hey Ultron"');
+      this.tray.setStatus('idle', 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis)');
     });
 
     this.wakeListener.on('wake', (info) => {
-      logger.wake(`Detected "${info.text}" (${info.engine || 'kws'})`);
-      this.triggerVoiceInteraction(`Wake Word "${info.text}"`, info.inlineCommand || '');
+      const targetAgent = info.targetAgent || 'ultron';
+      logger.wake(`Detected "${info.text}" (${info.engine || 'kws'}) [Target: ${targetAgent}]`);
+      this.triggerVoiceInteraction(`Wake Word "${info.text}"`, info.inlineCommand || '', targetAgent);
     });
 
     this.wakeListener.on('permission_error', (info) => {
@@ -168,7 +170,7 @@ class JarvisDaemon {
     if (this.config.greetOnStart) {
       this.busy = true;
       this.wakeListener.pause();
-      await this.speak('Ultron online and ready.');
+      await this.speak('Ultron and operative team online, sir.');
       this.busy = false;
       if (!this.muted) this.wakeListener.resume();
     }
@@ -178,16 +180,18 @@ class JarvisDaemon {
     }
   }
 
-  async speak(text) {
+  async speak(text, agent = this.activeAgent) {
     const clean = stripMarkdownForSpeech(text);
     if (!clean) return;
-    logger.info(`Speaking: ${clean}`);
+
+    const voices = this.audioOut.getVoiceForAgent(agent);
+    logger.info(`Speaking [${agent || 'ultron'} | Voice: ${voices.windowsVoice}]: ${clean}`);
 
     if (this.config.ttsEngine === 'gemini') {
       try {
         // Hard 6s cap so Gemini TTS 429 retries can NEVER freeze wake-word listening
         const wavBuf = await Promise.race([
-          this.gemini.synthesizeSpeech(clean),
+          this.gemini.synthesizeSpeech(clean, voices.geminiVoice),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Gemini TTS timed out (>6s)')), 6000),
           ),
@@ -205,7 +209,7 @@ class JarvisDaemon {
     }
 
     try {
-      await this.audioOut.speakWindows(clean);
+      await this.audioOut.speakWindows(clean, voices.windowsVoice);
     } catch (err) {
       logger.error(`Windows TTS failed: ${err.message}`);
     }
@@ -233,11 +237,24 @@ class JarvisDaemon {
     }
   }
 
-  async triggerVoiceInteraction(source = 'Wake Word', initialCommand = '') {
+  async triggerVoiceInteraction(source = 'Wake Word', initialCommand = '', targetAgent = null) {
     if (this.busy || this.shuttingDown) return;
     this.busy = true;
     this.wakeListener.pause();
-    this.tray.setStatus('active', 'Jarvis - Listening...');
+
+    if (targetAgent) {
+      this.activeAgent = targetAgent;
+    }
+
+    const agentLabel =
+      this.activeAgent === 'vision' || this.activeAgent === 'coder'
+        ? 'Vision (Code & SQL)'
+        : this.activeAgent === 'friday' || this.activeAgent === 'writer'
+          ? 'Friday (Word & PDF)'
+          : this.activeAgent === 'jarvis' || this.activeAgent === 'inspector' || this.activeAgent === 'qa'
+            ? 'Jarvis (QA & Inspector)'
+            : 'Ultron';
+    this.tray.setStatus('active', `${agentLabel} - Listening...`);
 
     try {
       let isFollowUp = false;
@@ -254,11 +271,11 @@ class JarvisDaemon {
           logger.user(`${transcript} (one-shot wake)`);
         } else {
           if (!isFollowUp) {
-            // Instant 0ms pre-cached "Yes, sir?" right when you say "Hey Jarvis"!
-            await this.audioOut.wakeReply();
-            logger.info(`Listening for command (${source})...`);
+            // Instant wake reply matching whichever agent was called!
+            await this.audioOut.wakeReplyForAgent(this.activeAgent);
+            logger.info(`Listening for command (${source}) [Active: ${this.activeAgent}]...`);
           } else {
-            logger.info(`Listening for follow-up (${this.config.followUpSeconds}s window)...`);
+            logger.info(`Listening for follow-up (${this.config.followUpSeconds}s window) [Active: ${this.activeAgent}]...`);
           }
 
           const waitSpeechMs = isFollowUp
@@ -287,7 +304,7 @@ class JarvisDaemon {
 
           const t0 = Date.now();
           try {
-            this.tray.setStatus('active', 'Jarvis - Understanding...');
+            this.tray.setStatus('active', `${agentLabel} - Understanding...`);
             if (this.config.sttEngine === 'local' && this.localStt.isAvailable()) {
               transcript = this.localStt.transcribeWav(rec.path) || '';
             } else {
@@ -323,17 +340,35 @@ class JarvisDaemon {
         }
 
         const lower = transcript.toLowerCase().replace(/[.!?,]/g, '').trim();
-        if (['cancel', 'never mind', 'nevermind', 'nothing', 'stop listening', 'go to sleep', 'bye', 'goodbye', 'that is all', 'thats all'].includes(lower)) {
+        if (/^(?:cancel|never\s*mind|nothing|stop\s+listening|go\s+to\s+sleep|sleep|bye(?:\s+bye)*|goodbye|thats\s+all|that\s+is\s+all)(?:\s+.*)?$/i.test(lower)) {
           await this.speak('Standing by, sir.');
           break;
         }
-        if (/^(?:ok(?:ay)?\s+)?(?:thank you|thanks|thank you very much|thanks a lot|good night|goodnight)(?:\s+(?:ultron|buddy))?$/.test(lower)) {
+        if (/^(?:ok(?:ay)?\s+)?(?:thank you|thanks|thank you very much|thanks a lot|good night|goodnight)(?:\s+(?:ultron|vision|friday|coder|writer|buddy))?$/.test(lower)) {
           await this.speak('You are welcome, sir. Let me know if you need anything else.');
           break; // Immediately return to standby so follow-up doesn't capture your next conversation!
         }
         if (/^(?:hey|here|ok|okay)?\s*(?:ultron|altron|tron|drone|prawn|john|anton|turn)$/.test(lower)) {
-          // User simply repeated the wake word during follow-up -> say "Yes, sir?" and keep listening cleanly
-          await this.audioOut.wakeReply();
+          this.activeAgent = 'ultron';
+          await this.audioOut.wakeReplyForAgent('ultron');
+          isFollowUp = true;
+          continue;
+        }
+        if (/^(?:hey|ok|okay)?\s*(?:vision|vizion|vishon|vison|vishan|region|legion|vyram|revision|coder|cypher|code)$/i.test(lower)) {
+          this.activeAgent = 'vision';
+          await this.audioOut.wakeReplyForAgent('vision');
+          isFollowUp = true;
+          continue;
+        }
+        if (/^(?:hey|ok|okay)?\s*(?:friday|fryday|fry\s*day)$/i.test(lower)) {
+          this.activeAgent = 'friday';
+          await this.audioOut.wakeReplyForAgent('friday');
+          isFollowUp = true;
+          continue;
+        }
+        if (/^(?:hey|ok|okay)?\s*(?:jarvis|charvis|jarviss|jarviz|service)$/i.test(lower)) {
+          this.activeAgent = 'jarvis';
+          await this.audioOut.wakeReplyForAgent('jarvis');
           isFollowUp = true;
           continue;
         }
@@ -343,17 +378,58 @@ class JarvisDaemon {
           return;
         }
 
-        this.tray.setStatus('active', 'Jarvis - Acting...');
+        this.tray.setStatus('active', `${this.activeAgent} - Acting...`);
         const tThink = Date.now();
         let reply = '';
         try {
-          const fastReply = await tryFastPath(transcript, this.controller);
+          const fastReply = await tryFastPath(transcript, this.controller, this.activeAgent);
           if (fastReply) {
-            reply = fastReply;
-            logger.info(`[SPEED] Fast-path executed in ${Date.now() - tThink}ms`);
+            if (typeof fastReply === 'object' && fastReply.isRollCall) {
+              this.tray.setStatus('active', 'Avengers Assembling...');
+              logger.info('[AVENGERS] Executing full operative roll call...');
+              await this.audioOut.playRollCall();
+              this.activeAgent = 'ultron';
+              if (this.config.followUpSeconds > 0) {
+                isFollowUp = true;
+                continue;
+              }
+              break;
+            }
+            if (typeof fastReply === 'object' && fastReply.switchAgent) {
+              this.activeAgent = fastReply.switchAgent;
+              reply = fastReply.text;
+            } else {
+              reply = fastReply;
+            }
+            logger.info(`[SPEED] Fast-path executed in ${Date.now() - tThink}ms [Agent: ${this.activeAgent}]`);
           } else {
-            reply = await this.gemini.processCommand(transcript, this.controller);
-            logger.info(`[SPEED] Gemini replied in ${Date.now() - tThink}ms`);
+            // Instant verbal acknowledgment for code, document, inspection, or multi-agent tasks
+            const isBuildTask =
+              /\b(?:build|make|create|code|write|program|engineer|draft|generate|check|audit|inspect|verify|test)\b.*\b(?:app|game|calculator|tracker|script|website|page|sql|schema|database|table|query|report|document|doc|pdf|code)\b/i.test(
+                transcript,
+              );
+            const isMultiAgentTask =
+              /\b(?:simultaneous|at\s+the\s+same\s+time|together|all\s+agents)\b/i.test(transcript) ||
+              (/\b(?:friday|vision|jarvis)\b/i.test(transcript) &&
+                /\b(?:and|also|while)\b/i.test(transcript) &&
+                /\b(?:friday|vision|jarvis|website|pdf|doc|app|sql)\b/i.test(transcript));
+
+            if (isMultiAgentTask) {
+              this.speak('Coordinating operatives simultaneously in parallel now, sir.').catch(() => {});
+            } else if (isBuildTask) {
+              const ack =
+                this.activeAgent === 'vision'
+                  ? 'On it, sir. Engineering that now.'
+                  : this.activeAgent === 'friday'
+                    ? 'On it, sir. Preparing your document now.'
+                    : this.activeAgent === 'jarvis'
+                      ? 'On it, sir. Inspecting and verifying now.'
+                      : 'On it, sir. Processing your request now.';
+              this.speak(ack).catch(() => {});
+            }
+
+            reply = await this.gemini.processCommand(transcript, this.controller, this.activeAgent);
+            logger.info(`[SPEED] Gemini replied in ${Date.now() - tThink}ms [Agent: ${this.activeAgent}]`);
           }
         } catch (err) {
           logger.error(`Gemini error: ${err.message}`);
@@ -367,7 +443,7 @@ class JarvisDaemon {
           }
         }
 
-        this.tray.setStatus('active', 'Jarvis - Speaking...');
+        this.tray.setStatus('active', `${this.activeAgent} - Speaking...`);
         await this.speak(reply);
 
         if (this.config.followUpSeconds > 0) {
@@ -380,10 +456,10 @@ class JarvisDaemon {
       this.busy = false;
       if (!this.shuttingDown) {
         if (this.muted) {
-          this.tray.setStatus('muted', 'Jarvis - Paused (Muted)');
+          this.tray.setStatus('muted', 'Ultron Team - Paused (Muted)');
         } else {
           this.wakeListener.resume();
-          this.tray.setStatus('idle', 'Ultron - Listening for "Hey Ultron"');
+          this.tray.setStatus('idle', 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis)');
         }
       }
     }
