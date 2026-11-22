@@ -83,16 +83,35 @@ function Speak-WinRT([string]$text, [string]$voice) {
     }
 }
 
-# Pre-synthesize instant wake replies in distinct agent voices at startup!
-# Ultron: Mark (Male Commander), Vision: David (Male Engineer), Friday: Zira (Female Architect), Jarvis: David/QA
-$cachedUltronBytes = $null
-$cachedVisionBytes = $null
-$cachedFridayBytes = $null
-$cachedJarvisBytes = $null
-try { $cachedUltronBytes = Synthesize-ToBytes "Yes, sir?" "Mark" } catch {}
-try { $cachedVisionBytes = Synthesize-ToBytes "Yes, sir? Vision here. What are we building or querying?" "David" } catch {}
-try { $cachedFridayBytes = Synthesize-ToBytes "Yes, sir? Friday here. Which document or report shall I create?" "Zira" } catch {}
-try { $cachedJarvisBytes = Synthesize-ToBytes "Jarvis at your service, sir. What code, query, or document shall I inspect?" "David" } catch {}
+# Pre-synthesize instant wake replies in distinct agent voices and cache to disk for ultra-fast (~150ms) startup!
+# Ultron: Mark (Male Commander), Vision: David (Male Engineer), Friday: Zira (Female Architect), Jarvis: David/QA, Veronica: Zira/Creative
+$tempDir = [System.IO.Path]::GetTempPath()
+$wakeDir = Join-Path $tempDir "ultron_wake_cache"
+if (-not (Test-Path $wakeDir)) { [void][System.IO.Directory]::CreateDirectory($wakeDir) }
+
+function Get-CachedWakeBytes([string]$agent, [string]$phrase, [string]$voice) {
+    $filePath = Join-Path $wakeDir "$agent.wav"
+    if (Test-Path $filePath) {
+        try {
+            return [System.IO.File]::ReadAllBytes($filePath)
+        } catch {}
+    }
+    try {
+        $bytes = Synthesize-ToBytes $phrase $voice
+        if ($null -ne $bytes -and $bytes.Length -gt 0) {
+            [System.IO.File]::WriteAllBytes($filePath, $bytes)
+        }
+        return ,$bytes
+    } catch {
+        return $null
+    }
+}
+
+$cachedUltronBytes = Get-CachedWakeBytes "ultron" "Yes, sir?" "Mark"
+$cachedVisionBytes = Get-CachedWakeBytes "vision" "Yes, sir? Vision here. What are we building or querying?" "David"
+$cachedFridayBytes = Get-CachedWakeBytes "friday" "Yes, sir? Friday here. Which document or report shall I create?" "Zira"
+$cachedJarvisBytes = Get-CachedWakeBytes "jarvis" "Jarvis at your service, sir. What code, query, or document shall I inspect?" "David"
+$cachedVeronicaBytes = Get-CachedWakeBytes "veronica" "Veronica here, sir. What visual assets, branding, or video loops shall I create?" "Zira"
 
 function Build-ToneWav([double[]]$freqs, [int]$noteMs = 55, [double]$volume = 0.16) {
     $sampleRate = 24000
@@ -159,6 +178,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         if ($action -eq "exit") {
             Emit-Json @{ id = $id; ok = $true }
             break
+        } elseif ($action -eq "stop") {
+            Emit-Json @{ id = $id; ok = $true; action = "stop" }
         } elseif ($action -eq "wake_reply") {
             $agent = [string]$req.agent
             $streamBytes = $null
@@ -168,6 +189,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 $streamBytes = $cachedFridayBytes
             } elseif ($agent -like "*jarvis*" -and $null -ne $cachedJarvisBytes) {
                 $streamBytes = $cachedJarvisBytes
+            } elseif ($agent -like "*veronica*" -and $null -ne $cachedVeronicaBytes) {
+                $streamBytes = $cachedVeronicaBytes
             } elseif ($null -ne $cachedUltronBytes) {
                 $streamBytes = $cachedUltronBytes
             }
@@ -196,13 +219,15 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         } elseif ($action -eq "roll_call") {
             Speak-WinRT "Avengers assemble! Commander Ultron reporting: mission control, PC operations, and system automation online." "Mark"
             Start-Sleep -Milliseconds 200
-            Speak-WinRT "Vision reporting, sir: software engineering, web applications, and SQL database architecture ready." "David"
+            Speak-WinRT "Vision reporting, sir: software engineering, full-stack backend, and SQL database architecture ready." "David"
             Start-Sleep -Milliseconds 200
             Speak-WinRT "Friday reporting, sir: executive document architecture, Word documents, and PDF reports standing by." "Zira"
             Start-Sleep -Milliseconds 200
             Speak-WinRT "Jarvis reporting, sir: quality assurance, deliverable verification, and system inspection at your service." "David"
             Start-Sleep -Milliseconds 200
-            Speak-WinRT "All four operatives assembled and standing by for your command, sir. What is our objective?" "Mark"
+            Speak-WinRT "Veronica reporting, sir: generative visual media, cinematic video direction, and creative design online." "Zira"
+            Start-Sleep -Milliseconds 200
+            Speak-WinRT "All five operatives assembled and standing by for your command, sir. What is our objective?" "Mark"
             Emit-Json @{ id = $id; ok = $true }
         } elseif ($action -eq "chime") {
             $kind = $req.kind

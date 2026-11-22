@@ -48,16 +48,18 @@ export function loadConfig() {
     windowsTtsVoice: (process.env.WINDOWS_TTS_VOICE || 'Mark').trim(),
     wakeWords: wakeWords.length > 0 ? wakeWords : ['Hey Ultron', 'Ultron', 'Okay Ultron'],
     wakeConfidence: (process.env.WAKE_CONFIDENCE || 'Medium').trim(),
-    recordWaitSpeechMs: parseIntSafe(process.env.RECORD_WAIT_SPEECH_MS, 4000),
-    recordSilenceMs: parseIntSafe(process.env.RECORD_SILENCE_MS, 800),
-    recordMaxMs: parseIntSafe(process.env.RECORD_MAX_MS, 9000),
-    vadThreshold: parseIntSafe(process.env.VAD_THRESHOLD, 260),
+    recordWaitSpeechMs: parseIntSafe(process.env.RECORD_WAIT_SPEECH_MS, 5000),
+    recordSilenceMs: parseIntSafe(process.env.RECORD_SILENCE_MS, 1800),
+    recordMaxMs: parseIntSafe(process.env.RECORD_MAX_MS, 25000),
+    vadThreshold: parseIntSafe(process.env.VAD_THRESHOLD, 220),
     followUpSeconds: parseIntSafe(process.env.FOLLOW_UP_SECONDS, 3),
     sessionResetMinutes: parseIntSafe(process.env.SESSION_RESET_MINUTES, 20),
     allowShell: parseBool(process.env.ALLOW_SHELL, true),
     enableTray: parseBool(process.env.ENABLE_TRAY, true),
     enableChimes: parseBool(process.env.ENABLE_CHIMES, true),
     greetOnStart: parseBool(process.env.GREET_ON_START, true),
+    hudPort: parseIntSafe(process.env.HUD_PORT, 3800),
+    enableHud: parseBool(process.env.ENABLE_HUD, true),
   };
 }
 

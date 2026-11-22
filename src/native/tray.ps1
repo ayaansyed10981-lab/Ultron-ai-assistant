@@ -96,6 +96,11 @@ $statusItem.Enabled = $false
 [void]$menu.Items.Add($statusItem)
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
+$hudItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$hudItem.Text = "Open Holographic HUD"
+$hudItem.Add_Click({ Emit-Event "open_hud" })
+[void]$menu.Items.Add($hudItem)
+
 $listenItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $listenItem.Text = "Listen Now (Trigger Jarvis)"
 $listenItem.Add_Click({ Emit-Event "listen_now" })

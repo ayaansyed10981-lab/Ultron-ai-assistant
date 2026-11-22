@@ -51,6 +51,16 @@ const AGENT_CONFIGS = {
     completePrompt: 'Jarvis voice profile calibrated and standing by for inspection, sir.',
     defaultSamples: 4,
   },
+  veronica: {
+    key: 'veronica',
+    name: 'Veronica',
+    title: 'Chief Visual Media & Creative Generative Director',
+    wakeWord: 'Hey Veronica',
+    voice: 'Zira',
+    startPrompt: 'Veronica visual media and creative calibration ready, sir. Please say Hey Veronica clearly {N} times when prompted.',
+    completePrompt: 'Veronica voice profile calibrated and standing by for visual direction, sir.',
+    defaultSamples: 4,
+  },
 };
 
 function parseArgs() {

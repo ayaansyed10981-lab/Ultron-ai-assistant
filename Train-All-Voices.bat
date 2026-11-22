@@ -1,8 +1,8 @@
 @echo off
-title Train All Operatives (Ultron, Vision, Friday, Jarvis)
+title Train All Operatives (Ultron, Vision, Friday, Jarvis, Veronica)
 cd /d "%~dp0"
 echo ============================================================
-echo   TRAIN ALL VOICES: ULTRON -^> VISION -^> FRIDAY -^> JARVIS
+echo   TRAIN ALL VOICES: ULTRON -^> VISION -^> FRIDAY -^> JARVIS -^> VERONICA
 echo ============================================================
 echo.
 echo Stopping any running Ultron instances to free microphone...

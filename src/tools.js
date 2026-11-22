@@ -67,6 +67,7 @@ export class ComputerController {
     this.onTimerFire = onTimerFire;
     this.geminiEngine = null;
     this.orchestrator = null;
+    this.hudServer = null;
     this.proc = null;
     this.pending = new Map();
     this.nextId = 1;
@@ -78,6 +79,27 @@ export class ComputerController {
   setGeminiEngine(engine) {
     this.geminiEngine = engine;
     this.orchestrator = new TeamOrchestrator(engine);
+  }
+
+  setHudServer(hudServer) {
+    this.hudServer = hudServer;
+  }
+
+  setActiveTasksGetter(fn) {
+    this.getActiveTasksSummary = fn;
+  }
+
+  setCallModeHandler(fn) {
+    this.callModeHandler = fn;
+  }
+
+  async checkCallStatus() {
+    try {
+      const data = await this._callNative('check_call_status', {});
+      return data || { inCall: false };
+    } catch {
+      return { inCall: false };
+    }
   }
 
   async start() {
@@ -538,18 +560,30 @@ export class ComputerController {
         type: 'function',
         name: 'delegate_to_cypher',
         description:
-          'Deploy Agent Cypher (Chief Software Engineer & SQL Database Architect) to write complete code/projects/scripts or engineer optimized SQL queries and database schemas (PostgreSQL, MySQL, SQLite, SQL Server). ALWAYS call this tool whenever the user asks for code, programming, algorithms, or SQL queries.',
+          'Deploy Agent Vision (Chief Software Engineer & Full-Stack Backend Architect) to engineer full-stack software, build production backend REST/GraphQL APIs and microservices (Node.js/Express, Python/FastAPI/Flask), write frontend web apps, or engineer optimized SQL queries and database schemas (PostgreSQL, MySQL, SQLite, SQL Server). ALWAYS call this tool whenever the user asks for code, programming, backend, APIs, servers, or SQL queries.',
         parameters: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['code', 'sql', 'review'],
-              description: 'Whether to write software code, engineer a SQL database query, or review/optimize code.',
+              enum: ['code', 'backend', 'sql', 'review'],
+              description: 'Whether to write software code, build a backend API/server, engineer a SQL database query, or review/optimize code.',
             },
             prompt: {
               type: 'string',
-              description: 'Full description of the software project or SQL database query to engineer.',
+              description: 'Full description of the software project, backend API, or SQL database query to engineer.',
+            },
+            stack: {
+              type: 'string',
+              description: 'Framework/stack when action is "backend" (e.g. node-express, fastapi, flask, auto).',
+            },
+            database: {
+              type: 'string',
+              description: 'Database system for backend (e.g. sqlite, postgresql, mongodb, mysql, none).',
+            },
+            auth: {
+              type: 'string',
+              description: 'Authentication strategy (e.g. jwt, api_key, session, none).',
             },
             dialect: {
               type: 'string',
@@ -596,18 +630,18 @@ export class ComputerController {
         type: 'function',
         name: 'delegate_to_jarvis',
         description:
-          'Deploy Agent Jarvis (Chief Quality Assurance Engineer & System Inspector) to inspect, audit, test, and verify Vision\'s software web apps, SQL queries and schemas, as well as Friday\'s Microsoft Word (.docx) and PDF (.pdf) documents. ALWAYS call this tool whenever the user asks to check, inspect, test, review, or verify an app, website, SQL query, Word document, or PDF report.',
+          'Deploy Agent Jarvis (Chief Quality Assurance Engineer & Security Inspector) to inspect, audit, test, and conduct rigorous security checks (OWASP Top 10, SQL injection, hardcoded secrets, auth hygiene) on Vision\'s backend APIs, servers, full-stack code, and SQL databases, as well as Friday\'s Microsoft Word (.docx) and PDF (.pdf) documents. ALWAYS call this tool whenever the user asks to check, inspect, test, review, audit, or verify an app, backend, security, SQL query, Word document, or PDF report.',
         parameters: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['check_app', 'check_sql', 'check_word', 'check_pdf', 'audit_all'],
-              description: 'Whether to check a web application, check SQL query, check Word document, check PDF, or audit all deliverables.',
+              enum: ['check_app', 'audit_backend', 'security_check', 'check_sql', 'check_word', 'check_pdf', 'audit_all'],
+              description: 'Whether to check a web application, audit backend API & security vulnerabilities, run security check, check SQL query, check Word document, check PDF, or audit all deliverables.',
             },
             target: {
               type: 'string',
-              description: 'Project name, folder path, filename, or SQL query string to inspect.',
+              description: 'Project name, backend folder path, filename, or SQL query string to inspect.',
             },
             dialect: {
               type: 'string',
@@ -631,6 +665,105 @@ export class ComputerController {
             },
           },
           required: ['mission_prompt'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'delegate_to_veronica',
+        description:
+          'Delegate visual branding, cinematic video loops, imagery, SVG vector art, or scrollytelling visual assets to Agent Veronica (Chief Visual Media & Creative Director).',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['media_kit', 'video', 'image'],
+              description:
+                'Whether to generate a full branding/scrollytelling media kit, a standalone video loop, or an image/SVG asset.',
+            },
+            company: {
+              type: 'string',
+              description: 'Company or product name for branding/media kit generation.',
+            },
+            prompt: {
+              type: 'string',
+              description: 'Description of the visual, video, or branding asset.',
+            },
+            style: {
+              type: 'string',
+              description: 'Aesthetic theme (e.g. cinematic, cyberpunk, luxury, minimal, tech).',
+            },
+          },
+          required: ['action', 'prompt'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'make_phone_call',
+        description:
+          'Place a phone call to the user or a phone number. Use when the user asks to call them, call their phone, dial a number, or ring their mobile.',
+        parameters: {
+          type: 'object',
+          properties: {
+            phone_number: {
+              type: 'string',
+              description:
+                'The phone number to call with country code (e.g. +91XXXXXXXXXX or +1XXXXXXXXXX). If omitted, uses USER_PHONE_NUMBER from .env.',
+            },
+            message: {
+              type: 'string',
+              description:
+                'Message or greeting for Ultron to speak when the user answers (for automated cloud voice calling).',
+            },
+          },
+        },
+      },
+      {
+        type: 'function',
+        name: 'send_whatsapp_message',
+        description:
+          'Open WhatsApp Desktop, search for a contact or dial a phone number, paste a message, and send it. Use whenever the user asks to open WhatsApp, message someone, text someone on WhatsApp, or send a WhatsApp message.',
+        parameters: {
+          type: 'object',
+          properties: {
+            contact: {
+              type: 'string',
+              description: 'Contact name (e.g. "Mom", "Sarah", "John Doe") or phone number with country code (e.g. "+919876543210").',
+            },
+            message: {
+              type: 'string',
+              description: 'The text message to type and send.',
+            },
+            pressEnter: {
+              type: 'boolean',
+              description: 'Whether to automatically press enter to send the message immediately (default true).',
+            },
+          },
+          required: ['contact', 'message'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'open_and_write',
+        description:
+          'Open or activate any Windows application (Notepad, Word, VS Code, etc.) and write, type, or paste text/content into it immediately. Use when the user asks to open an app and write or type something.',
+        parameters: {
+          type: 'object',
+          properties: {
+            app: {
+              type: 'string',
+              description: 'Application to open (e.g. "notepad", "word", "vscode"). Default is "notepad".',
+            },
+            text: {
+              type: 'string',
+              description: 'The text or content to write/type into the application.',
+            },
+            pressEnter: {
+              type: 'boolean',
+              description: 'Whether to press Enter after typing (default true).',
+            },
+          },
+          required: ['text'],
         },
       },
     ];
@@ -885,6 +1018,10 @@ export class ComputerController {
             return { text: JSON.stringify({ ok: false, error: 'Agent Cypher not initialized.' }) };
           }
           const action = String(args.action || 'code').toLowerCase();
+          if (action === 'backend') {
+            const res = await this.orchestrator.cypher.buildBackend(args);
+            return { text: JSON.stringify(res) };
+          }
           if (action === 'sql') {
             const res = await this.orchestrator.cypher.generateSql({
               prompt: args.prompt,
@@ -915,7 +1052,9 @@ export class ComputerController {
           }
           const action = String(args.action || 'audit_all').toLowerCase();
           let res;
-          if (action === 'check_app') {
+          if (action === 'audit_backend' || action === 'security_check' || action === 'security') {
+            res = await this.orchestrator.jarvis.auditBackendAndSecurity(args.target, args);
+          } else if (action === 'check_app') {
             res = await this.orchestrator.jarvis.checkApp(args.target);
           } else if (action === 'check_sql') {
             res = await this.orchestrator.jarvis.checkSql(args.target, args.dialect || 'PostgreSQL');
@@ -925,6 +1064,22 @@ export class ComputerController {
             res = await this.orchestrator.jarvis.checkPdfDocument(args.target);
           } else {
             res = await this.orchestrator.jarvis.auditDeliverables({});
+          }
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'delegate_to_veronica': {
+          if (!this.orchestrator || !this.orchestrator.veronica) {
+            return { text: JSON.stringify({ ok: false, error: 'Agent Veronica not initialized.' }) };
+          }
+          const action = String(args.action || 'media_kit').toLowerCase();
+          let res;
+          if (action === 'video') {
+            res = await this.orchestrator.veronica.generateVideo(args);
+          } else if (action === 'image') {
+            res = await this.orchestrator.veronica.generateImage(args);
+          } else {
+            res = await this.orchestrator.veronica.generateMediaKit(args);
           }
           return { text: JSON.stringify(res) };
         }
@@ -970,6 +1125,32 @@ export class ComputerController {
           return { text: JSON.stringify(output) };
         }
 
+        case 'make_phone_call': {
+          const res = await this.makePhoneCall(args.phone_number, args.message);
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'send_whatsapp_message': {
+          const contact = String(args.contact || '').trim();
+          const message = String(args.message || '').trim();
+          const pressEnter = args.pressEnter !== false;
+          if (!contact || !message) {
+            return {
+              text: JSON.stringify({ ok: false, error: 'Both contact and message are required.' }),
+            };
+          }
+          const res = await this.sendWhatsAppMessage(contact, message, pressEnter);
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'open_and_write': {
+          const app = String(args.app || 'notepad').trim();
+          const text = String(args.text || args.content || '').trim();
+          const pressEnter = args.pressEnter !== false;
+          const data = await this.openAndWrite(app, text, pressEnter);
+          return { text: JSON.stringify({ ok: true, ...data }) };
+        }
+
         default:
           return { text: JSON.stringify({ ok: false, error: `Unknown tool: ${name}` }) };
       }
@@ -977,5 +1158,112 @@ export class ComputerController {
       logger.error(`Tool ${name} failed: ${err.message}`);
       return { text: JSON.stringify({ ok: false, error: err.message }) };
     }
+  }
+
+  /**
+   * Make a phone call using Twilio Voice (cloud) or Windows Phone Link (local)
+   */
+  async makePhoneCall(phoneNumber, message) {
+    const targetNumber = phoneNumber || process.env.USER_PHONE_NUMBER;
+    const spokenMessage =
+      message ||
+      'Hello sir, this is Ultron calling from your computer. All systems and operatives are operational.';
+
+    if (!targetNumber) {
+      return {
+        ok: false,
+        error:
+          'No phone number configured. Please set USER_PHONE_NUMBER in .env or provide a phone number.',
+      };
+    }
+
+    const cleanNumber = targetNumber.replace(/[^\d+]/g, '');
+
+    // Auto-activate Call Mode so Ultron never interrupts while the user is on the call
+    if (this.callModeHandler) {
+      this.callModeHandler(true, 15);
+    }
+
+    // Check if Twilio Voice credentials are provided in .env
+    const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+    const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+    const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+
+    if (twilioSid && twilioToken && twilioFrom) {
+      try {
+        const auth = Buffer.from(`${twilioSid}:${twilioToken}`).toString('base64');
+        const twiml = `<Response><Say voice="Polly.Matthew">${spokenMessage.replace(/[<>&]/g, '')}</Say></Response>`;
+        const body = new URLSearchParams({
+          To: cleanNumber,
+          From: twilioFrom,
+          Twiml: twiml,
+        });
+
+        const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Calls.json`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${auth}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: body.toString(),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.sid) {
+          logger.info(`[PHONE] Twilio voice call placed to ${cleanNumber} (Call SID: ${data.sid})`);
+          return {
+            ok: true,
+            provider: 'twilio',
+            callSid: data.sid,
+            message: `Placing phone call to ${cleanNumber} via Twilio Voice. Your phone should be ringing now, sir.`,
+          };
+        }
+        logger.warn(`[PHONE] Twilio error: ${data.message || JSON.stringify(data)}; falling back to Phone Link.`);
+      } catch (err) {
+        logger.error(`[PHONE] Twilio call failed: ${err.message}`);
+      }
+    }
+
+    // Default & Zero-Config: Windows Phone Link via tel: protocol
+    return new Promise((resolve) => {
+      execFile(
+        'cmd.exe',
+        ['/c', 'start', '', `tel:${cleanNumber}`],
+        { windowsHide: true },
+        (err) => {
+          if (err) {
+            resolve({ ok: false, error: `Failed to trigger dialer: ${err.message}` });
+          } else {
+            logger.info(`[PHONE] Initiated phone call to ${cleanNumber} via Windows Phone Link.`);
+            resolve({
+              ok: true,
+              provider: 'phonelink',
+              message: `Calling ${cleanNumber} via Windows Phone Link, sir.`,
+            });
+          }
+        },
+      );
+    });
+  }
+
+  /**
+   * Send WhatsApp message via Windows WhatsApp Desktop app or URI
+   */
+  async sendWhatsAppMessage(contact, message, pressEnter = true) {
+    return this._callNative('whatsapp_send_message', { contact, message, pressEnter });
+  }
+
+  /**
+   * Directly open an application and write/paste text into it immediately
+   */
+  async openAndWrite(app = 'notepad', text = '', pressEnter = true) {
+    return this._callNative('open_and_type', { app, text, pressEnter });
+  }
+
+  /**
+   * Directly type/paste text into the currently active/focused window
+   */
+  async typeActiveWindow(text = '', pressEnter = true) {
+    return this._callNative('type_active_window', { text, pressEnter });
   }
 }

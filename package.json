@@ -13,6 +13,7 @@
     "train:vision": "node src/enroll_voice.js --agent vision",
     "train:friday": "node src/enroll_voice.js --agent friday",
     "train:jarvis": "node src/enroll_voice.js --agent jarvis",
+    "train:veronica": "node src/enroll_voice.js --agent veronica",
     "diagnose": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-arm64-diagnostics.ps1",
     "install-autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-autostart.ps1",
     "uninstall-autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-autostart.ps1"

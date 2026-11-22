@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ULTRON // Multi-Agent Quantum HUD & Gesture Hub</title>
+  <link rel="stylesheet" href="hud.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- MediaPipe Hands & Camera Utils for Real-Time Gesture Recognition -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body class="hud-body">
+  <div class="hud-scanline"></div>
+  <div class="hud-ambient-glow"></div>
+
+  <!-- Background Close Notification Modal -->
+  <div id="minimize-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-icon">🛡️</div>
+      <h2>Running in Background</h2>
+      <p>The HUD window is now closed. <strong>Ultron and your operative team are active 24/7</strong> in your Windows System Tray.</p>
+      <div class="modal-commands">
+        <div><span>🎙️ Voice Command:</span> Say <em>"Hey Ultron, open UI"</em> or <em>"show HUD"</em></div>
+        <div><span>💻 System Tray:</span> Right-click the Arc Reactor tray icon > <em>Open Ultron HUD</em></div>
+      </div>
+      <button id="modal-close-btn" class="hud-btn primary">Understood, Sir</button>
+    </div>
+  </div>
+
+  <!-- TOP HEADER & TELEMETRY BAR -->
+  <header class="hud-header">
+    <div class="header-left">
+      <div class="hud-logo-core">
+        <div class="core-ring"></div>
+        <div class="core-pulse"></div>
+        <span class="core-icon">⚡</span>
+      </div>
+      <div class="title-group">
+        <h1 class="hud-title">ULTRON <span class="accent-text">OS</span></h1>
+        <div class="hud-subtitle">MULTI-AGENT QUANTUM COMMAND & GESTURE HUB</div>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Badges -->
+    <div class="telemetry-bar">
+      <div class="telem-item" id="telem-cpu">
+        <span class="telem-label">CPU</span>
+        <span class="telem-val">ARM64</span>
+      </div>
+      <div class="telem-item" id="telem-ram">
+        <span class="telem-label">RAM</span>
+        <span class="telem-val" id="ram-val">--%</span>
+      </div>
+      <div class="telem-item" id="telem-battery">
+        <span class="telem-label">BATTERY</span>
+        <span class="telem-val" id="bat-val">--%</span>
+      </div>
+      <div class="telem-item status-badge" id="system-status-pill">
+        <span class="dot"></span>
+        <span class="status-txt">ONLINE 24/7</span>
+      </div>
+    </div>
+
+    <!-- Header Action Controls -->
+    <div class="header-actions">
+      <button id="cam-toggle-btn" class="hud-btn" title="Toggle Hand Gesture Camera">
+        <span class="btn-icon">📷</span>
+        <span class="btn-text">GESTURES: <strong id="cam-state-label">ON</strong></span>
+      </button>
+      <button id="mute-toggle-btn" class="hud-btn" title="Mute/Pause Wake Word">
+        <span class="btn-icon">🔊</span>
+        <span class="btn-text" id="mute-label">UNMUTED</span>
+      </button>
+      <button id="assemble-btn" class="hud-btn assemble" title="Trigger Full Team Roll Call">
+        <span class="btn-icon">⚡</span>
+        <span class="btn-text">ASSEMBLE</span>
+      </button>
+      <button id="close-hud-btn" class="hud-btn close" title="Close window to background (Voice stays alive!)">
+        <span class="btn-icon">✕</span>
+        <span class="btn-text">HIDE HUD</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN HUD GRID (3-COLUMN LAYOUT) -->
+  <main class="hud-grid">
+
+    <!-- LEFT COLUMN: LIVE HAND GESTURE CAMERA HUD -->
+    <section class="hud-panel left-panel">
+      <div class="panel-header">
+        <span class="panel-tag">VISION SENSOR</span>
+        <h2>HAND GESTURE RADAR</h2>
+        <span class="status-indicator live" id="camera-status-dot">ACTIVE</span>
+      </div>
+
+      <!-- Camera Feed with Holographic Overlay -->
+      <div class="camera-viewport-container">
+        <video id="webcam-video" autoplay playsinline muted></video>
+        <canvas id="gesture-canvas"></canvas>
+        <div class="hud-reticle"></div>
+
+        <!-- Real-Time Detected Gesture Badge -->
+        <div id="gesture-detected-badge" class="gesture-badge hidden">
+          <div class="gesture-icon" id="gesture-icon">✋</div>
+          <div class="gesture-info">
+            <span class="gesture-name" id="gesture-name">OPEN PALM</span>
+            <span class="gesture-desc" id="gesture-desc">HALT / MUTE</span>
+          </div>
+          <!-- Hold-to-confirm Radial Ring -->
+          <svg class="gesture-progress-ring" viewBox="0 0 44 44">
+            <circle class="ring-bg" cx="22" cy="22" r="18"/>
+            <circle class="ring-fill" id="gesture-ring-fill" cx="22" cy="22" r="18"/>
+          </svg>
+        </div>
+
+        <!-- Camera Off Placeholder -->
+        <div id="camera-off-overlay" class="camera-placeholder hidden">
+          <div class="cam-icon">📷</div>
+          <p>Hand Gesture Camera Paused</p>
+          <button id="start-cam-btn" class="hud-btn small">Turn On Camera</button>
+        </div>
+      </div>
+
+      <!-- Gesture Command Guide / Legend -->
+      <div class="gesture-legend">
+        <div class="legend-title">GESTURE CONTROLS</div>
+        <div class="legend-grid">
+          <div class="legend-item" data-gesture="palm">
+            <span class="g-icon">✋</span>
+            <div class="g-text"><strong>Open Palm</strong><span>Stop Talking / Mute</span></div>
+          </div>
+          <div class="legend-item" data-gesture="fist">
+            <span class="g-icon">✊</span>
+            <div class="g-text"><strong>Fist</strong><span>Hide HUD / Background</span></div>
+          </div>
+          <div class="legend-item" data-gesture="point">
+            <span class="g-icon">☝️</span>
+            <div class="g-text"><strong>Point Up</strong><span>Listen Now (Mic)</span></div>
+          </div>
+          <div class="legend-item" data-gesture="peace">
+            <span class="g-icon">✌️</span>
+            <div class="g-text"><strong>Peace Sign (V)</strong><span>Switch to Vision</span></div>
+          </div>
+          <div class="legend-item" data-gesture="thumbs_up">
+            <span class="g-icon">👍</span>
+            <div class="g-text"><strong>Thumbs Up</strong><span>Avengers Assemble</span></div>
+          </div>
+          <div class="legend-item" data-gesture="swipe">
+            <span class="g-icon">👈👉</span>
+            <div class="g-text"><strong>Swipe Wave</strong><span>Prev / Next Track</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CENTER COLUMN: ARC REACTOR CORE & ACTIVE MISSION STAGE -->
+    <section class="hud-panel center-panel">
+      <!-- Active Commander / Agent State Banner -->
+      <div class="active-agent-banner">
+        <div class="agent-avatar" id="active-agent-avatar">⚡</div>
+        <div class="agent-meta">
+          <span class="agent-rank">ACTIVE OPERATIVE</span>
+          <h2 id="active-agent-name">COMMANDER ULTRON</h2>
+          <span class="agent-role-desc" id="active-agent-title">Supreme Mission Control & PC Automation</span>
+        </div>
+        <div class="operative-state-pill" id="agent-state-pill">STANDBY</div>
+      </div>
+
+      <!-- Arc Reactor Quantum Core Visualization -->
+      <div class="arc-reactor-stage">
+        <div class="arc-reactor-wrapper" id="reactor-core-btn" title="Click to trigger voice listening">
+          <div class="reactor-outer-ring"></div>
+          <div class="reactor-segmented-ring"></div>
+          <div class="reactor-inner-ring"></div>
+          <div class="reactor-core-light"></div>
+          <div class="reactor-mic-icon">
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Audio Waveform Visualizer -->
+        <div class="waveform-container">
+          <canvas id="waveform-canvas" width="460" height="60"></canvas>
+        </div>
+        <div class="reactor-status-caption" id="reactor-caption">CLICK CORE OR SAY "HEY ULTRON"</div>
+      </div>
+
+      <!-- Live Speech & Dialogue Transcript Stream -->
+      <div class="transcript-display-container">
+        <div class="transcript-stream" id="transcript-stream">
+          <div class="message-bubble system">
+            <div class="msg-author">SYSTEM</div>
+            <div class="msg-content">Ultron Multi-Agent Team active. Operatives Vision, Friday, Jarvis, and Veronica ready. Voice commands and hand gestures standing by.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Action Commands Bar -->
+      <div class="quick-chips-row">
+        <button class="chip" data-cmd="Avengers assemble">⚡ Avengers assemble</button>
+        <button class="chip" data-cmd="Tell Vision to build a backend API with SQLite">💻 Vision Backend API</button>
+        <button class="chip" data-cmd="Friday write a PDF report on Quantum AI">📄 Friday PDF Report</button>
+        <button class="chip" data-cmd="Jarvis run a security check on the backend">🔍 Jarvis Security Audit</button>
+        <button class="chip" data-cmd="Veronica make a visual video loop">🎬 Veronica Video</button>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN: MULTI-AGENT OPERATIVE ROSTER (ALL 6 AGENTS) -->
+    <section class="hud-panel right-panel">
+      <div class="panel-header">
+        <span class="panel-tag">TEAM ROSTER</span>
+        <h2>SPECIALIST AGENTS</h2>
+        <span class="operatives-count">6 READY</span>
+      </div>
+
+      <div class="agents-roster-list">
+
+        <!-- Agent 1: Ultron -->
+        <div class="agent-card active" data-agent="ultron" id="card-ultron">
+          <div class="card-glow"></div>
+          <div class="card-icon">⚡</div>
+          <div class="card-body">
+            <div class="card-top">
+              <h3>Ultron</h3>
+              <span class="badge leader">COMMANDER</span>
+            </div>
+            <div class="card-role">Supreme AI Commander & Windows PC Operator</div>
+            <div class="card-status-bar">
+              <span class="dot live"></span>
+              <span class="card-status-text">Standing By (Say "Hey Ultron")</span>
+            </div>
+          </div>
+          <button class="talk-btn" title="Talk to Ultron">TALK</button>
+        </div>
+
+        <!-- Agent 2: Vision -->
+        <div class="agent-card" data-agent="vision" id="card-vision">
+          <div class="card-glow"></div>
+          <div class="card-icon">💻</div>
+          <div class="card-body">
+            <div class="card-top">
+              <h3>Vision</h3>
+              <span class="badge specialist">FULL-STACK</span>
+            </div>
+            <div class="card-role">Chief Software Engineer & Backend Architect</div>
+            <div class="card-status-bar">
+              <span class="dot"></span>
+              <span class="card-status-text" id="status-txt-vision">Standby (Say "Hey Vision")</span>
+            </div>
+            <div class="task-progress-box hidden" id="task-box-vision">
+              <div class="task-label" id="task-lbl-vision">Working on backend API...</div>
+              <div class="progress-track"><div class="progress-bar infinite"></div></div>
+            </div>
+          </div>
+          <button class="talk-btn" title="Talk to Vision">TALK</button>
+        </div>
+
+        <!-- Agent 3: Friday -->
+        <div class="agent-card" data-agent="friday" id="card-friday">
+          <div class="card-glow"></div>
+          <div class="card-icon">📄</div>
+          <div class="card-body">
+            <div class="card-top">
+              <h3>Friday</h3>
+              <span class="badge specialist">DOCUMENTS</span>
+            </div>
+            <div class="card-role">Executive Document Architect (Word & PDF)</div>
+            <div class="card-status-bar">
+              <span class="dot"></span>
+              <span class="card-status-text" id="status-txt-friday">Standby (Say "Hey Friday")</span>
+            </div>
+            <div class="task-progress-box hidden" id="task-box-friday">
+              <div class="task-label" id="task-lbl-friday">Writing document...</div>
+              <div class="progress-track"><div class="progress-bar infinite"></div></div>
+            </div>
+          </div>
+          <button class="talk-btn" title="Talk to Friday">TALK</button>
+        </div>
+
+        <!-- Agent 4: Jarvis -->
+        <div class="agent-card" data-agent="jarvis" id="card-jarvis">
+          <div class="card-glow"></div>
+          <div class="card-icon">🔍</div>
+          <div class="card-body">
+            <div class="card-top">
+              <h3>Jarvis</h3>
+              <span class="badge qa">QA & SECURITY</span>
+            </div>
+            <div class="card-role">Chief QA Engineer & Security Inspector</div>
+            <div class="card-status-bar">
+              <span class="dot"></span>
+              <span class="card-status-text" id="status-txt-jarvis">Standby (Say "Hey Jarvis")</span>
+            </div>
+            <div class="task-progress-box hidden" id="task-box-jarvis">
+              <div class="task-label" id="task-lbl-jarvis">Running security audit...</div>
+              <div class="progress-track"><div class="progress-bar infinite"></div></div>
+            </div>
+          </div>
+          <button class="talk-btn" title="Talk to Jarvis">TALK</button>
+        </div>
+
+        <!-- Agent 5: Veronica -->
+        <div class="agent-card" data-agent="veronica" id="card-veronica">
+          <div class="card-glow"></div>
+          <div class="card-icon">🎬</div>
+          <div class="card-body">
+            <div class="card-top">
+              <h3>Veronica</h3>
+              <span class="badge media">CREATIVE</span>
+            </div>
+            <div class="card-role">Chief Visual Media & Video Director</div>
+            <div class="card-status-bar">
+              <span class="dot"></span>
+              <span class="card-status-text" id="status-txt-veronica">Standby (Say "Hey Veronica")</span>
+            </div>
+            <div class="task-progress-box hidden" id="task-box-veronica">
+              <div class="task-label" id="task-lbl-veronica">Generating visual loops...</div>
+              <div class="progress-track"><div class="progress-bar infinite"></div></div>
+            </div>
+          </div>
+          <button class="talk-btn" title="Talk to Veronica">TALK</button>
+        </div>
+
+        <!-- Agent 6: Sentinel -->
+        <div class="agent-card" data-agent="sentinel" id="card-sentinel">
+          <div class="card-glow"></div>
+          <div class="card-icon">🛡️</div>
+          <div class="card-body">
+            <div class="card-top">
+              <h3>Sentinel</h3>
+              <span class="badge guard">GUARDIAN</span>
+            </div>
+            <div class="card-role">System Operator & Hardware Guardian</div>
+            <div class="card-status-bar">
+              <span class="dot live"></span>
+              <span class="card-status-text">Hardware Telemetry Online</span>
+            </div>
+          </div>
+          <button class="talk-btn" title="Talk to Sentinel">TALK</button>
+        </div>
+
+      </div>
+    </section>
+  </main>
+
+  <!-- BOTTOM BAR: COMMAND INPUT TERMINAL -->
+  <footer class="hud-footer">
+    <div class="input-wrapper">
+      <span class="prompt-symbol">>_</span>
+      <input type="text" id="cmd-input" placeholder="Type a command or speak naturally (e.g. 'Vision build an auth backend', 'Jarvis run security check', 'Assemble')..." autocomplete="off">
+      <button id="send-btn" class="hud-btn primary">
+        <span>TRANSMIT</span>
+        <span class="btn-arrow">↵</span>
+      </button>
+    </div>
+    <div class="footer-tip">
+      <span class="key-hint">TIP:</span> Close this window anytime with <kbd>✕</kbd> or <kbd>Fist ✊</kbd> — Ultron continues running 24/7 in background. Say <em>"Hey Ultron, open UI"</em> to reopen.
+    </div>
+  </footer>
+
+  <script src="hud.js"></script>
+  <script src="gestures.js"></script>
+</body>
+</html>

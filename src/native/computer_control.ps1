@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
@@ -178,6 +178,10 @@ $appAliases = @{
     "excel"         = "excel.exe"
     "powerpoint"    = "powerpnt.exe"
     "copilot"       = "ms-copilot:"
+    "phone link"    = "ms-yourphone:"
+    "phonelink"     = "ms-yourphone:"
+    "phone"         = "ms-yourphone:"
+    "your phone"    = "ms-yourphone:"
 }
 
 $vkMap = @{
@@ -444,6 +448,148 @@ function Handle-Action($req) {
                 computerName = $env:COMPUTERNAME
                 userName = $env:USERNAME
             }
+        }
+
+        "check_call_status" {
+            $inCall = $false
+            $details = ""
+            $procs = Get-Process -Name "PhoneExperienceHost","PhoneLink" -ErrorAction SilentlyContinue
+            if ($null -ne $procs) {
+                foreach ($p in $procs) {
+                    if ($p.MainWindowTitle -match "(Call|Calling|Connected|Dialing)") {
+                        $inCall = $true
+                        $details = "Phone Link: $($p.MainWindowTitle)"
+                        break
+                    }
+                }
+            }
+            if (-not $inCall) {
+                $meet = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                    $_.MainWindowTitle -match "(Meet\s*–|Google\s*Meet|Zoom\s*Meeting|Teams\s*Call|WhatsApp\s*Call|Skype\s*Call)"
+                } | Select-Object -First 1
+                if ($null -ne $meet) {
+                    $inCall = $true
+                    $details = "Active Call/Meeting: $($meet.MainWindowTitle)"
+                }
+            }
+            return @{ inCall = $inCall; details = $details }
+        }
+
+        "whatsapp_send_message" {
+            $contact = if ($null -ne $args.contact) { [string]$args.contact } else { [string]$req.contact }
+            $msg = if ($null -ne $args.message) { [string]$args.message } else { [string]$req.message }
+            $pressEnter = if ($null -ne $args.pressEnter) { [bool]$args.pressEnter } elseif ($null -ne $req.pressEnter) { [bool]$req.pressEnter } else { $true }
+
+            if ([string]::IsNullOrWhiteSpace($contact) -or [string]::IsNullOrWhiteSpace($msg)) {
+                throw "Both contact and message are required for whatsapp_send_message."
+            }
+
+            # If contact looks like a phone number (e.g. +1234567890 or digits with dashes)
+            $cleanDigits = $contact -replace "[^0-9+]", ""
+            $isPhone = ($cleanDigits.Length -ge 7) -and ($contact -match "^[\+]?[\d\s\-()]{7,}$")
+
+            if ($isPhone) {
+                $cleanNumber = $cleanDigits -replace "^\+", ""
+                $encodedMsg = [System.Uri]::EscapeDataString($msg)
+                Start-Process "whatsapp://send?phone=$cleanNumber&text=$encodedMsg" -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 2200
+
+                $wa = Get-Process -Name "WhatsApp" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+                if ($null -ne $wa) {
+                    [Win32Control]::SetForegroundWindow($wa.MainWindowHandle)
+                    [Win32Control]::ShowWindow($wa.MainWindowHandle, 9)
+                    Start-Sleep -Milliseconds 400
+                }
+                if ($pressEnter) {
+                    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+                }
+                return @{ ok = $true; mode = "phone"; contact = $contact; message = $msg }
+            }
+
+            # Contact name search workflow in WhatsApp Desktop
+            Start-Process "whatsapp:" -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 1200
+
+            $wa = Get-Process -Name "WhatsApp" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($null -ne $wa) {
+                [Win32Control]::SetForegroundWindow($wa.MainWindowHandle)
+                [Win32Control]::ShowWindow($wa.MainWindowHandle, 9)
+                Start-Sleep -Milliseconds 400
+            }
+
+            # Focus search box (Ctrl + F), clear previous search, paste contact name
+            [System.Windows.Forms.SendKeys]::SendWait("^f")
+            Start-Sleep -Milliseconds 250
+            [System.Windows.Forms.SendKeys]::SendWait("^a{BACKSPACE}")
+            Start-Sleep -Milliseconds 150
+
+            Set-Clipboard -Value $contact
+            [System.Windows.Forms.SendKeys]::SendWait("^v")
+            Start-Sleep -Milliseconds 850
+
+            # Press Enter to open the selected chat
+            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            Start-Sleep -Milliseconds 500
+
+            # Paste the message into the active chat box
+            Set-Clipboard -Value $msg
+            [System.Windows.Forms.SendKeys]::SendWait("^v")
+            Start-Sleep -Milliseconds 250
+
+            if ($pressEnter) {
+                [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            }
+
+            return @{ ok = $true; mode = "contact"; contact = $contact; message = $msg }
+        }
+
+        "open_and_type" {
+            $appName = if ($null -ne $args.app) { [string]$args.app } else { "notepad" }
+            $textToType = if ($null -ne $args.text) { [string]$args.text } else { "" }
+            $pressEnter = if ($null -ne $args.pressEnter) { [bool]$args.pressEnter } else { $true }
+
+            $key = $appName.Trim().ToLowerInvariant()
+            $target = if ($appAliases.ContainsKey($key)) { $appAliases[$key] } else { $appName.Trim() }
+
+            # 1. Launch or activate target application
+            Start-Process -FilePath $target -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 650
+
+            # 2. Find and focus the newly opened or active window
+            $procName = [System.IO.Path]::GetFileNameWithoutExtension($target)
+            $p = Get-Process -Name $procName -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($null -ne $p) {
+                [Win32Control]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+                [Win32Control]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+                Start-Sleep -Milliseconds 250
+            }
+
+            # 3. Paste the text cleanly via Windows Clipboard + Ctrl+V
+            if (-not [string]::IsNullOrWhiteSpace($textToType)) {
+                Set-Clipboard -Value $textToType
+                [System.Windows.Forms.SendKeys]::SendWait("^v")
+                Start-Sleep -Milliseconds 150
+                if ($pressEnter) {
+                    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+                }
+            }
+
+            return @{ ok = $true; app = $appName; typedLength = $textToType.Length }
+        }
+
+        "type_active_window" {
+            $textToType = if ($null -ne $args.text) { [string]$args.text } else { "" }
+            $pressEnter = if ($null -ne $args.pressEnter) { [bool]$args.pressEnter } else { $true }
+
+            if (-not [string]::IsNullOrWhiteSpace($textToType)) {
+                Set-Clipboard -Value $textToType
+                [System.Windows.Forms.SendKeys]::SendWait("^v")
+                Start-Sleep -Milliseconds 100
+                if ($pressEnter) {
+                    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+                }
+            }
+            return @{ ok = $true; typedLength = $textToType.Length }
         }
 
         default {

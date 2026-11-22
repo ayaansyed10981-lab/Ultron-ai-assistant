@@ -21,6 +21,7 @@ echo     - Say "Hey Ultron" for Commander Ultron
 echo     - Say "Hey Vision" for Coding and SQL
 echo     - Say "Hey Friday" for Word and PDF Documents
 echo     - Say "Hey Jarvis" for QA and Inspector
+echo     - Say "Hey Veronica" for Visual Media and Video Loops
 echo ============================================================
 echo.
 ping -n 3 127.0.0.1 >nul

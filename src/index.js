@@ -13,6 +13,7 @@ import { tryFastPath } from './fastpath.js';
 import { GeminiEngine } from './gemini.js';
 import { logger } from './logger.js';
 import { ComputerController } from './tools.js';
+import { HudServer, openHudWindow } from './hud_server.js';
 
 const NO_CLI = process.argv.includes('--no-cli');
 const PID_FILE = path.join(TEMP_DIR, 'jarvis.pid');
@@ -99,12 +100,183 @@ class JarvisDaemon {
     this.gemini = new GeminiEngine(config);
     this.controller = new ComputerController(config, (label) => this.handleTimerFired(label));
     this.controller.setGeminiEngine(this.gemini);
+    this.hudServer = new HudServer(config, this);
+    this.controller.setHudServer(this.hudServer);
 
     this.activeAgent = 'ultron';
+    this.activeAgentTasks = new Map();
     this.busy = false;
     this.muted = false;
+    this.inCallMode = false;
+    this.callModeTimer = null;
     this.shuttingDown = false;
     this.permissionWarned = false;
+    this.isSpeaking = false;
+    this.bargeInInterrupted = false;
+    this.bargeInCommand = '';
+    this.bargeInTargetAgent = null;
+
+    this.controller.setActiveTasksGetter((agent) => this.getActiveTasksSummary(agent));
+    this.controller.setCallModeHandler((enabled, durationMins) => this.setCallMode(enabled, durationMins));
+  }
+
+  getActiveTasksSummary(targetAgent = null) {
+    if (this.activeAgentTasks.size === 0) {
+      if (targetAgent && targetAgent !== 'ultron') {
+        const name = targetAgent.charAt(0).toUpperCase() + targetAgent.slice(1);
+        return `${name} is currently on standby with no active background tasks, sir.`;
+      }
+      return 'All operatives are currently on standby ready for your command, sir.';
+    }
+
+    const tasks = Array.from(this.activeAgentTasks.values());
+    if (targetAgent && targetAgent !== 'ultron') {
+      const match = tasks.find((t) => t.agent.toLowerCase() === targetAgent.toLowerCase());
+      if (match) {
+        const sec = Math.round((Date.now() - match.startTime) / 1000);
+        const name = match.agent.charAt(0).toUpperCase() + match.agent.slice(1);
+        return `${name} is currently working on: ${match.summary} (running for ${sec} seconds).`;
+      }
+      const name = targetAgent.charAt(0).toUpperCase() + targetAgent.slice(1);
+      return `${name} has finished all tasks and is on standby, sir.`;
+    }
+
+    const descriptions = tasks.map((t) => {
+      const sec = Math.round((Date.now() - t.startTime) / 1000);
+      const name = t.agent.charAt(0).toUpperCase() + t.agent.slice(1);
+      return `${name} is working on ${t.summary} (${sec}s)`;
+    });
+
+    return `Active operations: ${descriptions.join(', ')}. All other operatives are on standby.`;
+  }
+
+  getListeningStatusText() {
+    if (this.activeAgentTasks.size === 0) {
+      return 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis, Veronica)';
+    }
+    const busyAgents = Array.from(
+      new Set(Array.from(this.activeAgentTasks.values()).map((t) => t.agent.toUpperCase())),
+    );
+    return `Ultron Team - Listening (${busyAgents.join(', ')} working in background)`;
+  }
+
+  openHud() {
+    openHudWindow(this.config.hudPort);
+  }
+
+  switchAgent(target) {
+    if (!target) return;
+    const norm = String(target).toLowerCase();
+    this.activeAgent = norm;
+    logger.info(`Switched active agent to: ${norm}`);
+    this.updateTrayStatus();
+    if (this.hudServer) {
+      this.hudServer.broadcast('agent_switched', { agent: norm });
+    }
+  }
+
+  async triggerRollCall() {
+    this.tray.setStatus('active', 'Avengers Assembling...');
+    logger.info('[AVENGERS] Executing full operative roll call...');
+    if (this.hudServer) {
+      this.hudServer.broadcast('roll_call', { status: 'assembling' });
+    }
+    await this.audioOut.playRollCall();
+    this.activeAgent = 'ultron';
+    this.updateTrayStatus();
+  }
+
+  async executeUserCommand(text, targetAgent = null) {
+    if (!text || !text.trim()) return;
+    logger.user(`[HUD] "${text}" (Target: ${targetAgent || this.activeAgent})`);
+    if (targetAgent) {
+      this.activeAgent = targetAgent;
+    }
+    await this.triggerVoiceInteraction('HUD Command', text, targetAgent || this.activeAgent);
+  }
+
+  updateTrayStatus(state = 'idle') {
+    if (this.muted) {
+      this.tray.setStatus('muted', 'Ultron Team - Paused (Muted)');
+      if (this.hudServer) {
+        this.hudServer.broadcast('status', {
+          state: 'muted',
+          muted: this.muted,
+          inCallMode: this.inCallMode,
+          activeAgent: this.activeAgent,
+        });
+      }
+      return;
+    }
+    this.tray.setStatus(state, this.getListeningStatusText());
+    if (this.hudServer) {
+      this.hudServer.broadcast('status', {
+        state,
+        muted: this.muted,
+        inCallMode: this.inCallMode,
+        activeAgent: this.activeAgent,
+      });
+    }
+  }
+
+  launchAgentBackgroundTask(agent, transcript) {
+    const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const summary = transcript
+      .replace(/^(?:build|make|create|code|write|program|engineer|draft|generate)\s+/i, '')
+      .slice(0, 45);
+
+    const taskInfo = {
+      id: taskId,
+      agent,
+      transcript,
+      summary,
+      startTime: Date.now(),
+    };
+    this.activeAgentTasks.set(taskId, taskInfo);
+    this.updateTrayStatus();
+    if (this.hudServer) {
+      this.hudServer.broadcast('tasks_updated', {
+        tasks: Array.from(this.activeAgentTasks.values()),
+      });
+    }
+
+    logger.info(`[BACKGROUND] ${agent.toUpperCase()} started background task: "${transcript}" [ID: ${taskId}]`);
+
+    (async () => {
+      try {
+        const reply = await this.gemini.processCommand(transcript, this.controller, agent);
+        const elapsedSec = Math.round((Date.now() - taskInfo.startTime) / 1000);
+        logger.info(`[BACKGROUND] ${agent.toUpperCase()} completed task in ${elapsedSec}s: "${transcript}"`);
+
+        // Wait until user is not actively interacting with another agent
+        while (this.busy || (this.wakeListener && this.wakeListener.activeRecording)) {
+          await new Promise((r) => setTimeout(r, 600));
+        }
+
+        // Soft chime + Spoken announcement in the specific agent's voice
+        await this.audioOut.chime('done');
+        const voiceInfo = this.audioOut.getVoiceForAgent(agent);
+        await this.audioOut.speakWindows(reply, voiceInfo.windowsVoice);
+      } catch (err) {
+        logger.error(`[BACKGROUND] Task error for ${agent}: ${err.message}`);
+        while (this.busy) {
+          await new Promise((r) => setTimeout(r, 600));
+        }
+        const voiceInfo = this.audioOut.getVoiceForAgent(agent);
+        await this.audioOut.speakWindows(
+          `Notice, sir. ${agent.charAt(0).toUpperCase() + agent.slice(1)} encountered an issue completing that task.`,
+          voiceInfo.windowsVoice,
+        );
+      } finally {
+        this.activeAgentTasks.delete(taskId);
+        this.updateTrayStatus();
+        if (this.hudServer) {
+          this.hudServer.broadcast('tasks_updated', {
+            tasks: Array.from(this.activeAgentTasks.values()),
+          });
+        }
+      }
+    })();
   }
 
   async start() {
@@ -116,6 +288,9 @@ class JarvisDaemon {
 
     await this.audioOut.start();
     await this.controller.start();
+    if (this.hudServer) {
+      await this.hudServer.start();
+    }
     if (this.localStt.isAvailable()) {
       this.localStt.init();
       this.wakeListener.setLocalStt(this.localStt);
@@ -132,6 +307,9 @@ class JarvisDaemon {
         );
       }
     });
+    this.tray.on('open_hud', () => {
+      this.openHud();
+    });
     this.tray.on('listen_now', () => {
       this.triggerVoiceInteraction('Tray Click');
     });
@@ -146,14 +324,17 @@ class JarvisDaemon {
     // Wire 24/7 Offline Neural Wake-Word Listener events
     this.wakeListener.on('ready', (info) => {
       logger.info(
-        `Offline neural wake-word engine active (${info.words.join(', ')}). Standing by 24/7 for Ultron, Vision, and Friday.`,
+        `Offline neural wake-word engine active (${info.words.join(', ')}). Standing by 24/7 for Ultron, Vision, Friday, Jarvis, and Veronica.`,
       );
-      this.tray.setStatus('idle', 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis)');
+      this.tray.setStatus('idle', 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis, Veronica)');
     });
 
     this.wakeListener.on('wake', (info) => {
       const targetAgent = info.targetAgent || 'ultron';
       logger.wake(`Detected "${info.text}" (${info.engine || 'kws'}) [Target: ${targetAgent}]`);
+      if (this.hudServer) {
+        this.hudServer.broadcast('wake', { text: info.text, targetAgent });
+      }
       this.triggerVoiceInteraction(`Wake Word "${info.text}"`, info.inlineCommand || '', targetAgent);
     });
 
@@ -162,6 +343,27 @@ class JarvisDaemon {
         this.permissionWarned = true;
         logger.error(info.message);
         this.tray.notify('Jarvis Microphone Permission Needed', info.message);
+      }
+    });
+
+    this.wakeListener.on('barge_in', async (info) => {
+      if (!this.isSpeaking) return;
+      logger.info(`[BARGE_IN] User spoke during agent speech (${info.engine}: "${info.text}")! Halting playback immediately.`);
+
+      this.bargeInInterrupted = true;
+      this.bargeInCommand = info.inlineCommand || (info.isVoiceActivity ? '' : info.text) || '';
+      this.bargeInTargetAgent = info.targetAgent || this.activeAgent;
+
+      // Immediately silence audio playback!
+      await this.audioOut.stopPlayback();
+
+      // Notify HUD
+      if (this.hudServer) {
+        this.hudServer.broadcast('agent_speaking', {
+          agent: this.activeAgent,
+          isSpeaking: false,
+          interrupted: true,
+        });
       }
     });
 
@@ -182,37 +384,81 @@ class JarvisDaemon {
 
   async speak(text, agent = this.activeAgent) {
     const clean = stripMarkdownForSpeech(text);
-    if (!clean) return;
+    if (!clean) return { interrupted: false };
 
     const voices = this.audioOut.getVoiceForAgent(agent);
     logger.info(`Speaking [${agent || 'ultron'} | Voice: ${voices.windowsVoice}]: ${clean}`);
 
-    if (this.config.ttsEngine === 'gemini') {
-      try {
-        // Hard 6s cap so Gemini TTS 429 retries can NEVER freeze wake-word listening
-        const wavBuf = await Promise.race([
-          this.gemini.synthesizeSpeech(clean, voices.geminiVoice),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Gemini TTS timed out (>6s)')), 6000),
-          ),
-        ]);
-        if (wavBuf) {
-          await this.audioOut.playWavBuffer(wavBuf);
-          return;
+    if (this.hudServer) {
+      this.hudServer.broadcast('agent_speaking', {
+        agent: agent || this.activeAgent,
+        text: clean,
+        isSpeaking: true,
+      });
+      this.hudServer.broadcast('transcript', {
+        speaker: agent || this.activeAgent,
+        text: clean,
+        role: 'agent',
+      });
+    }
+
+    this.isSpeaking = true;
+    this.bargeInInterrupted = false;
+    this.bargeInCommand = '';
+    this.bargeInTargetAgent = null;
+    this.wakeListener.setBargeIn(true);
+
+    try {
+      if (this.config.ttsEngine === 'gemini') {
+        try {
+          // Hard 6s cap so Gemini TTS 429 retries can NEVER freeze wake-word listening
+          const wavBuf = await Promise.race([
+            this.gemini.synthesizeSpeech(clean, voices.geminiVoice),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Gemini TTS timed out (>6s)')), 6000),
+            ),
+          ]);
+          if (wavBuf && !this.bargeInInterrupted) {
+            await this.audioOut.playWavBuffer(wavBuf);
+            return {
+              interrupted: this.bargeInInterrupted,
+              command: this.bargeInCommand,
+              targetAgent: this.bargeInTargetAgent,
+            };
+          }
+        } catch (err) {
+          logger.warn(`Gemini TTS skipped (${err.message}); using instant native Windows voice.`);
+          if (String(err.message).includes('429') || String(err.message).includes('timed out')) {
+            this.gemini.ttsUnavailable = true;
+          }
         }
-      } catch (err) {
-        logger.warn(`Gemini TTS skipped (${err.message}); using instant native Windows voice.`);
-        if (String(err.message).includes('429') || String(err.message).includes('timed out')) {
-          this.gemini.ttsUnavailable = true;
+      }
+
+      if (!this.bargeInInterrupted) {
+        try {
+          await this.audioOut.speakWindows(clean, voices.windowsVoice);
+        } catch (err) {
+          if (!this.bargeInInterrupted) {
+            logger.error(`Windows TTS failed: ${err.message}`);
+          }
         }
+      }
+    } finally {
+      this.isSpeaking = false;
+      this.wakeListener.setBargeIn(false);
+      if (this.hudServer) {
+        this.hudServer.broadcast('agent_speaking', {
+          agent: agent || this.activeAgent,
+          isSpeaking: false,
+        });
       }
     }
 
-    try {
-      await this.audioOut.speakWindows(clean, voices.windowsVoice);
-    } catch (err) {
-      logger.error(`Windows TTS failed: ${err.message}`);
-    }
+    return {
+      interrupted: this.bargeInInterrupted,
+      command: this.bargeInCommand,
+      targetAgent: this.bargeInTargetAgent,
+    };
   }
 
   async handleTimerFired(label) {
@@ -227,18 +473,73 @@ class JarvisDaemon {
 
   toggleMute() {
     this.muted = !this.muted;
+    if (!this.muted) {
+      this.inCallMode = false;
+      if (this.callModeTimer) {
+        clearTimeout(this.callModeTimer);
+        this.callModeTimer = null;
+      }
+    }
     this.wakeListener.setMuted(this.muted);
     if (this.muted) {
       logger.info('Wake-word listening PAUSED.');
-      this.tray.setStatus('muted', 'Jarvis - Paused (Muted)');
     } else {
       logger.info('Wake-word listening RESUMED.');
-      this.tray.setStatus('idle', 'Ultron - Listening for "Hey Ultron"');
+    }
+    this.updateTrayStatus();
+  }
+
+  setCallMode(enabled, durationMins = 0) {
+    if (this.callModeTimer) {
+      clearTimeout(this.callModeTimer);
+      this.callModeTimer = null;
+    }
+    this.inCallMode = enabled;
+    this.muted = enabled;
+    this.wakeListener.setMuted(enabled);
+
+    if (enabled) {
+      logger.info(
+        `[CALL_MODE] Activated. Operatives muted.${durationMins > 0 ? ` Auto-resume in ${durationMins}m.` : ''}`,
+      );
+      this.tray.setStatus('muted', 'Ultron Team - Muted (In Call / Do Not Disturb)');
+      if (this.hudServer) {
+        this.hudServer.broadcast('status', {
+          state: 'muted',
+          muted: true,
+          inCallMode: true,
+          activeAgent: this.activeAgent,
+        });
+      }
+      if (durationMins > 0) {
+        this.callModeTimer = setTimeout(() => {
+          this.setCallMode(false);
+          this.audioOut.chime('wake').catch(() => {});
+          logger.info('[CALL_MODE] Duration elapsed. Auto-resumed listening.');
+        }, durationMins * 60 * 1000);
+      }
+    } else {
+      logger.info('[CALL_MODE] Deactivated. Operatives listening.');
+      this.updateTrayStatus();
     }
   }
 
   async triggerVoiceInteraction(source = 'Wake Word', initialCommand = '', targetAgent = null) {
-    if (this.busy || this.shuttingDown) return;
+    if (this.busy || this.shuttingDown || this.muted || this.inCallMode) return;
+
+    // Active Call Guard: if Windows Phone Link or a meeting is in an active call, stay silent!
+    if (this.controller && typeof this.controller.checkCallStatus === 'function') {
+      try {
+        const callStatus = await this.controller.checkCallStatus();
+        if (callStatus && callStatus.inCall) {
+          logger.info(`[CALL_GUARD] Suppressed trigger because active call detected: ${callStatus.details}`);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     this.busy = true;
     this.wakeListener.pause();
 
@@ -265,10 +566,33 @@ class JarvisDaemon {
         let sttMs = 0;
 
         if (pendingInlineCommand) {
-          // One-shot command already spoken right after "Hey Jarvis ..." (e.g., "Hey Jarvis open Chrome")
+          const isIncomplete =
+            /\b(and|then|to|that|saying|with|for|about|tell|message|text|search|write|create|send|or|in|at|on)$/i.test(
+              pendingInlineCommand,
+            ) ||
+            (/^(?:open\s+whatsapp\s+search|search|tell|message)\b/i.test(pendingInlineCommand) &&
+              pendingInlineCommand.split(/\s+/).length < 4);
+
+          if (isIncomplete) {
+            logger.info(
+              `[INLINE] Incomplete one-shot phrase detected ("${pendingInlineCommand}"). Recording full continuous command instead...`,
+            );
+            pendingInlineCommand = '';
+          }
+        }
+
+        if (pendingInlineCommand) {
+          // One-shot command already spoken right after "Hey Ultron ..." (e.g., "Hey Ultron open Chrome")
           transcript = pendingInlineCommand;
           pendingInlineCommand = '';
           logger.user(`${transcript} (one-shot wake)`);
+          if (this.hudServer) {
+            this.hudServer.broadcast('transcript', {
+              speaker: 'user',
+              text: transcript,
+              role: 'user',
+            });
+          }
         } else {
           if (!isFollowUp) {
             // Instant wake reply matching whichever agent was called!
@@ -337,6 +661,13 @@ class JarvisDaemon {
           }
 
           logger.user(`${transcript} (STT ${sttMs}ms)`);
+          if (this.hudServer) {
+            this.hudServer.broadcast('transcript', {
+              speaker: 'user',
+              text: transcript,
+              role: 'user',
+            });
+          }
         }
 
         const lower = transcript.toLowerCase().replace(/[.!?,]/g, '').trim();
@@ -398,6 +729,9 @@ class JarvisDaemon {
             if (typeof fastReply === 'object' && fastReply.switchAgent) {
               this.activeAgent = fastReply.switchAgent;
               reply = fastReply.text;
+              if (this.hudServer) {
+                this.hudServer.broadcast('agent_switched', { agent: this.activeAgent });
+              }
             } else {
               reply = fastReply;
             }
@@ -405,27 +739,34 @@ class JarvisDaemon {
           } else {
             // Instant verbal acknowledgment for code, document, inspection, or multi-agent tasks
             const isBuildTask =
-              /\b(?:build|make|create|code|write|program|engineer|draft|generate|check|audit|inspect|verify|test)\b.*\b(?:app|game|calculator|tracker|script|website|page|sql|schema|database|table|query|report|document|doc|pdf|code)\b/i.test(
+              /\b(?:build|make|create|code|write|program|engineer|draft|generate|check|audit|inspect|verify|test|design)\b.*\b(?:app|game|calculator|tracker|script|website|page|sql|schema|database|table|query|report|document|doc|pdf|code|video|image|visual|media|scrollytelling|banner|logo)\b/i.test(
                 transcript,
               );
             const isMultiAgentTask =
               /\b(?:simultaneous|at\s+the\s+same\s+time|together|all\s+agents)\b/i.test(transcript) ||
-              (/\b(?:friday|vision|jarvis)\b/i.test(transcript) &&
+              (/\b(?:friday|vision|jarvis|veronica)\b/i.test(transcript) &&
                 /\b(?:and|also|while)\b/i.test(transcript) &&
-                /\b(?:friday|vision|jarvis|website|pdf|doc|app|sql)\b/i.test(transcript));
+                /\b(?:friday|vision|jarvis|veronica|website|pdf|doc|app|sql|video|image)\b/i.test(transcript));
 
-            if (isMultiAgentTask) {
-              this.speak('Coordinating operatives simultaneously in parallel now, sir.').catch(() => {});
-            } else if (isBuildTask) {
-              const ack =
-                this.activeAgent === 'vision'
-                  ? 'On it, sir. Engineering that now.'
+            if (isMultiAgentTask || isBuildTask) {
+              const ack = isMultiAgentTask
+                ? 'Coordinating operatives in parallel now, sir. You can speak to any of us anytime while we work.'
+                : this.activeAgent === 'vision'
+                  ? 'On it, sir. Engineering that in the background now. Feel free to speak to the rest of the team while I work.'
                   : this.activeAgent === 'friday'
-                    ? 'On it, sir. Preparing your document now.'
+                    ? 'On it, sir. Preparing your document in the background now. The team remains listening.'
                     : this.activeAgent === 'jarvis'
-                      ? 'On it, sir. Inspecting and verifying now.'
-                      : 'On it, sir. Processing your request now.';
-              this.speak(ack).catch(() => {});
+                      ? 'On it, sir. Commencing quality assurance inspection in the background. Standing by.'
+                      : this.activeAgent === 'veronica'
+                        ? 'On it, sir. Generating visual assets and video loop now in the background.'
+                        : 'On it, sir. Processing that in the background now.';
+
+              this.tray.setStatus('active', `${this.activeAgent} - Speaking...`);
+              await this.speak(ack);
+
+              // Launch as asynchronous background worker so listener resumes immediately (<1s)!
+              this.launchAgentBackgroundTask(this.activeAgent, transcript);
+              break;
             }
 
             reply = await this.gemini.processCommand(transcript, this.controller, this.activeAgent);
@@ -444,7 +785,41 @@ class JarvisDaemon {
         }
 
         this.tray.setStatus('active', `${this.activeAgent} - Speaking...`);
-        await this.speak(reply);
+        const speakResult = await this.speak(reply);
+
+        if (speakResult && speakResult.interrupted) {
+          logger.info('[BARGE_IN] Agent speech was interrupted by user. Switching to new user request...');
+          const rawCmd = (speakResult.command || '').trim();
+          const isStopWord = /^(?:stop|wait|pause|quiet|cancel|never\s*mind|halt|shh|shut\s*up)$/i.test(rawCmd);
+
+          if (isStopWord) {
+            await this.audioOut.chime('done');
+            await this.speak('Standing by, sir.');
+            break;
+          }
+
+          if (speakResult.targetAgent) {
+            this.activeAgent = speakResult.targetAgent;
+          }
+
+          let newCommand = rawCmd
+            .replace(/^(?:hey|okay|ok)?\s*(?:ultron|vision|friday|jarvis|veronica)\b/i, '')
+            .replace(/^(?:wait|listen|pause|hold on)\s*,?\s*/i, '')
+            .trim();
+
+          if (newCommand && newCommand.length > 2) {
+            logger.info(`[BARGE_IN] Executing user command spoken during speech: "${newCommand}"`);
+            pendingInlineCommand = newCommand;
+            isFollowUp = false;
+            continue;
+          } else {
+            // User said "Hey Ultron" or interrupted by speaking: prompt them and record!
+            await this.audioOut.wakeReplyForAgent(this.activeAgent);
+            isFollowUp = false;
+            pendingInlineCommand = '';
+            continue;
+          }
+        }
 
         if (this.config.followUpSeconds > 0) {
           isFollowUp = true;
@@ -549,6 +924,9 @@ class JarvisDaemon {
     this.shuttingDown = true;
     logger.info('Shutting down Jarvis...');
     cleanupPidFile();
+    if (this.hudServer) {
+      this.hudServer.stop();
+    }
     this.wakeListener.stop();
     this.tray.stop();
     this.controller.stop();

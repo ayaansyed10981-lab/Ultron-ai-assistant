@@ -1,11 +1,13 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { logger } from './logger.js';
+import { openHudWindow } from './hud_server.js';
 import {
   getSpokenTeamIntro,
   getVisionIntro,
   getFridayIntro,
   getJarvisIntro,
+  getVeronicaIntro,
   getUltronIntro,
 } from './agents/team_registry.js';
 
@@ -45,12 +47,19 @@ const APP_KEYWORDS = [
   'excel',
   'powerpoint',
   'copilot',
+  'phone link',
+  'phonelink',
+  'phone',
 ];
 
 const SITE_SHORTCUTS = {
   youtube: 'https://www.youtube.com',
   google: 'https://www.google.com',
   gmail: 'https://mail.google.com',
+  calendar: 'https://calendar.google.com',
+  'google calendar': 'https://calendar.google.com',
+  meet: 'https://meet.google.com/new',
+  'google meet': 'https://meet.google.com/new',
   github: 'https://github.com',
   chatgpt: 'https://chatgpt.com',
   gemini: 'https://gemini.google.com',
@@ -79,13 +88,16 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   if (!text) {
     const norm = String(activeAgent || 'ultron').toLowerCase();
     if (norm === 'vision' || norm === 'coder' || norm === 'cypher') {
-      return 'Yes, sir? Vision here. What are we building or querying?';
+      return 'Yes, sir? Vision here. What web app, backend API, or SQL database are we building?';
     }
     if (norm === 'friday' || norm === 'writer' || norm === 'scribe') {
       return 'Yes, sir? Friday here. Which document or report shall I create?';
     }
     if (norm === 'jarvis' || norm === 'inspector' || norm === 'qa') {
-      return 'Yes, sir? Jarvis here. What code, query, or document shall I inspect?';
+      return 'Yes, sir? Jarvis here. What code, backend API, security audit, or document shall I inspect?';
+    }
+    if (norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video') {
+      return 'Yes, sir? Veronica here. What visual assets, branding, or video loops shall I create?';
     }
     return 'Ultron online, sir. How can I assist you?';
   }
@@ -93,6 +105,38 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   // 0. Avengers Assemble Multi-Agent Roll Call
   if (/\b(?:avengers?\s+assemble|team\s+assemble|assemble\s+the\s+team|assemble|roll\s*call)\b/i.test(text)) {
     return { isRollCall: true };
+  }
+
+  // 0.1 Active Background Operations Status Inquiry
+  if (/\b(?:what\s+is\s+vision\s+doing|is\s+vision\s+working|vision\s+status)\b/i.test(text)) {
+    if (controller && typeof controller.getActiveTasksSummary === 'function') {
+      return controller.getActiveTasksSummary('vision');
+    }
+    return 'Vision is on standby, sir.';
+  }
+  if (/\b(?:what\s+is\s+friday\s+doing|is\s+friday\s+working|friday\s+status)\b/i.test(text)) {
+    if (controller && typeof controller.getActiveTasksSummary === 'function') {
+      return controller.getActiveTasksSummary('friday');
+    }
+    return 'Friday is on standby, sir.';
+  }
+  if (/\b(?:what\s+is\s+jarvis\s+doing|is\s+jarvis\s+working|jarvis\s+status)\b/i.test(text)) {
+    if (controller && typeof controller.getActiveTasksSummary === 'function') {
+      return controller.getActiveTasksSummary('jarvis');
+    }
+    return 'Jarvis is on standby, sir.';
+  }
+  if (/\b(?:what\s+is\s+veronica\s+doing|is\s+veronica\s+working|veronica\s+status)\b/i.test(text)) {
+    if (controller && typeof controller.getActiveTasksSummary === 'function') {
+      return controller.getActiveTasksSummary('veronica');
+    }
+    return 'Veronica is on standby, sir.';
+  }
+  if (/\b(?:what\s+is\s+(?:the\s+)?team\s+doing|what\s+are\s+(?:the\s+)?agents\s+doing|team\s+status|status\s+of\s+agents|status\s+of\s+(?:the\s+)?team|what\s+are\s+you\s+all\s+doing|who\s+is\s+working)\b/i.test(text)) {
+    if (controller && typeof controller.getActiveTasksSummary === 'function') {
+      return controller.getActiveTasksSummary();
+    }
+    return 'All operatives are currently on standby ready for your command, sir.';
   }
 
   // 0. Direct Agent Switching
@@ -105,19 +149,25 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:jarvis|inspector|qa)$/i.test(text) || text === 'jarvis') {
     return { switchAgent: 'jarvis', text: 'Switching to Jarvis, sir. Jarvis standing by for inspection.' };
   }
+  if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:veronica|media|creative|visuals?)$/i.test(text) || text === 'veronica') {
+    return { switchAgent: 'veronica', text: 'Switching to Veronica, sir. Veronica standing by for visual media.' };
+  }
   if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:ultron|altron)$/i.test(text) || text === 'ultron') {
     return { switchAgent: 'ultron', text: 'Ultron standing by, sir.' };
   }
 
   // 0.1 Specialist Agent Name Inquiries
-  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?coding\s+agent|who\s+is\s+(?:the\s+)?coding\s+agent|who\s+(?:does|handles)\s+(?:the\s+)?coding|coding\s+agent)\b/i.test(text)) {
-    return 'Vision is our Chief Software Engineer and SQL Database Architect, sir. You can talk to him directly anytime by saying "Hey Vision".';
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:coding|code|programmer|developer|software|backend|sql)\s+agent|who\s+is\s+(?:the\s+)?(?:coder|vision|cypher|programmer)\s+agent|who\s+(?:writes|codes|engineers)\s+(?:the\s+)?(?:code|software|backend|api|sql)|coding\s+agent)\b/i.test(text)) {
+    return 'Vision is our Chief Software Engineer and Full-Stack Backend Architect, sir. He engineers web applications, backend APIs, microservices, and SQL databases. You can talk to him directly anytime by saying "Hey Vision".';
   }
   if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:document|word|pdf)\s+agent|who\s+is\s+(?:the\s+)?(?:document|word|pdf)\s+agent|who\s+(?:does|handles)\s+(?:the\s+)?(?:documents?|pdf|word)|document\s+agent)\b/i.test(text)) {
     return 'Friday is our Executive Document Architect for Word and PDF documents, sir. You can talk to her directly anytime by saying "Hey Friday".';
   }
-  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:checking|qa|testing|audit|inspector)\s+agent|who\s+is\s+(?:the\s+)?(?:checking|inspector|jarvis|qa)\s+agent|who\s+(?:checks|audits|inspects|tests)\s+(?:the\s+)?(?:code|apps?|docs?|sql|pdf)|checking\s+agent)\b/i.test(text)) {
-    return 'Jarvis is our Chief Quality Assurance Engineer & System Inspector, sir. He audits Vision\'s applications and SQL queries, as well as Friday\'s Word and PDF documents. You can talk to him directly by saying "Hey Jarvis".';
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:checking|qa|testing|audit|inspector|security)\s+agent|who\s+is\s+(?:the\s+)?(?:checking|inspector|jarvis|qa|security)\s+agent|who\s+(?:checks|audits|inspects|tests)\s+(?:the\s+)?(?:code|apps?|docs?|sql|pdf|backend|security)|checking\s+agent|security\s+agent)\b/i.test(text)) {
+    return 'Jarvis is our Chief Quality Assurance Engineer & Security Inspector, sir. He audits backend APIs, security vulnerabilities, OWASP Top 10, SQL queries, and Word and PDF documents. You can talk to him directly by saying "Hey Jarvis".';
+  }
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:video|image|visual|creative|media)\s+agent|who\s+is\s+(?:the\s+)?(?:video|image|visual|creative|media|veronica)\s+agent|who\s+(?:creates|makes|generates)\s+(?:the\s+)?(?:videos?|images?|visuals?|media)|visual\s+agent)\b/i.test(text)) {
+    return 'Veronica is our Chief Visual Media & Generative Creative Director, sir. She creates cinematic video loops, imagery, branding, and scrollytelling visual assets. You can talk to her directly by saying "Hey Veronica".';
   }
 
   // 0.2 Instant Polite Conversational Replies (< 2ms)
@@ -188,8 +238,129 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     return 'Opening your documents folder in File Explorer, sir.';
   }
 
-  // Do NOT intercept multi-step commands ("open notepad and type...") — let Gemini chain those
-  if (/\b(and then|and type|and write|and search|and play|and close)\b/i.test(text)) {
+  // 0.4 Google Workspace Actions (Calendar, Google Meet, Gmail)
+  if (/^(?:check(?: my)? (?:schedule|calendar|events?|agenda)|what(?:'s| is) on my (?:schedule|calendar)|open (?:my )?calendar)$/i.test(text)) {
+    await controller.executeTool('open_url', { url: 'https://calendar.google.com' });
+    return 'Opening your Google Calendar, sir.';
+  }
+  if (/^(?:start(?: a)? (?:meeting|meet|call)|new meeting|create(?: a)? (?:meeting|meet|meeting link)|open (?:google )?meet)$/i.test(text)) {
+    await controller.executeTool('open_url', { url: 'https://meet.google.com/new' });
+    return 'Starting an instant Google Meet session for you, sir.';
+  }
+  if (/^(?:check(?: my)? (?:emails?|gmail|mail|inbox)|open (?:my )?(?:gmail|emails?|inbox))$/i.test(text)) {
+    await controller.executeTool('open_url', { url: 'https://mail.google.com' });
+    return 'Opening your Gmail inbox, sir.';
+  }
+  if (/^(?:compose(?: an?)? (?:email|mail)|new email|write(?: an?)? email)$/i.test(text)) {
+    await controller.executeTool('open_url', { url: 'https://mail.google.com/mail/u/0/#inbox?compose=new' });
+    return 'Opening a new draft in Gmail, sir.';
+  }
+
+  // 0.25 Call Mode & In-Call Mute Protection (<2ms)
+  const callMuteMatch = text.match(
+    /^(?:i(?:'m| am) (?:on|in) (?:a )?call|i(?:'m| am) in (?:a )?meeting|call mode(?: on)?|meeting mode(?: on)?|do not disturb(?: mode)?|mute(?:\s+for\s+(\d+)\s*(?:minutes?|mins?))?)$/i,
+  );
+  if (callMuteMatch) {
+    const mins = callMuteMatch[1] ? Number.parseInt(callMuteMatch[1], 10) : 0;
+    if (controller && typeof controller.callModeHandler === 'function') {
+      controller.callModeHandler(true, mins);
+    }
+    return mins > 0
+      ? `Call mode activated. Muting all operatives for ${mins} minutes so you are not disturbed, sir.`
+      : 'Call mode activated. All operatives are muted so you will not be disturbed, sir. Say unmute or double-click the tray icon when your call finishes.';
+  }
+
+  if (
+    /^(?:unmute|call (?:is )?(?:over|done|ended)|meeting (?:is )?(?:over|done|ended)|i(?:'m| am) back|i have returned|cancel mute)$/i.test(
+      text,
+    )
+  ) {
+    if (controller && typeof controller.callModeHandler === 'function') {
+      controller.callModeHandler(false);
+    }
+    return 'Welcome back, sir. All operatives are active and standing by.';
+  }
+
+  // 0.3 Phone Calling Fastpath (<50ms)
+  if (/^(?:call (?:my )?phone|call me|ring (?:my )?phone|phone me)$/i.test(text)) {
+    const res = await controller.makePhoneCall();
+    if (res.ok) {
+      return res.message;
+    }
+    return 'I need your phone number, sir. Please set USER_PHONE_NUMBER in dot env, or say call followed by your number.';
+  }
+
+  const callMatch = text.match(/^(?:call|dial|ring|phone)\s+([+\d\s\-()]{7,18})$/i);
+  if (callMatch) {
+    const res = await controller.makePhoneCall(callMatch[1].trim());
+    return res.ok ? res.message : `Could not place the call, sir: ${res.error}`;
+  }
+
+  // 0.35 Direct "Open that and write that" ("open notepad and write hello world", "open word and write my essay")
+  const openAndWriteMatch = text.match(
+    /^(?:open|launch)\s+([a-zA-Z0-9\s]+?)\s+(?:and\s+)?(?:write|type|note|paste)(?:\s+(?:down|that|in|saying))?\s+(.+)$/i,
+  );
+  if (openAndWriteMatch) {
+    const appTarget = openAndWriteMatch[1].trim();
+    const textToWrite = openAndWriteMatch[2].trim();
+    if (appTarget && textToWrite) {
+      logger.info(`[FAST] Open and write direct: App="${appTarget}", Text="${textToWrite}"`);
+      await controller.openAndWrite(appTarget, textToWrite, true);
+      const appName = appTarget.charAt(0).toUpperCase() + appTarget.slice(1);
+      return `Opened ${appName} and wrote that down for you, sir.`;
+    }
+  }
+
+  // 0.36 Direct Typing into currently active window ("write that hello world", "type that meeting at 3pm")
+  const typeOnlyMatch = text.match(
+    /^(?:type|write)\s+(?:that|down|saying|text|message)\s+(.+)$/i,
+  );
+  if (typeOnlyMatch) {
+    const textToWrite = typeOnlyMatch[1].trim();
+    if (textToWrite) {
+      logger.info(`[FAST] Type into active window: "${textToWrite}"`);
+      await controller.typeActiveWindow(textToWrite, true);
+      return 'Typed that for you, sir.';
+    }
+  }
+
+  // 0.37 Direct Song & Music Playback ("play this song Believer", "play Starboy", "play Bohemian Rhapsody on Spotify")
+  const songMatch = text.match(
+    /^(?:play\s+(?:this\s+|the\s+)?song(?:\s+(?:called|named))?|play\s+music(?:\s+by)?|play\s+track|play)\s+(.+)$/i,
+  );
+  if (songMatch) {
+    const rawQuery = songMatch[1].trim();
+    const isSimpleMediaControl =
+      /^(?:pause|play|music|media|video|song|track|sound|audio|next|previous)$/i.test(rawQuery);
+
+    if (!isSimpleMediaControl) {
+      let songClean = rawQuery;
+      let platform = 'youtube';
+
+      if (/\s+on\s+spotify$/i.test(songClean)) {
+        platform = 'spotify';
+        songClean = songClean.replace(/\s+on\s+spotify$/i, '').trim();
+      } else if (/\s+on\s+(?:youtube|yt)$/i.test(songClean)) {
+        platform = 'youtube';
+        songClean = songClean.replace(/\s+on\s+(?:youtube|yt)$/i, '').trim();
+      }
+
+      logger.info(`[FAST] Playing song directly: "${songClean}" on ${platform}`);
+
+      if (platform === 'spotify') {
+        const spotifyUrl = `https://open.spotify.com/search/${encodeURIComponent(songClean)}`;
+        await controller.executeTool('open_url', { url: spotifyUrl });
+        return `Playing ${songClean} on Spotify for you, sir.`;
+      } else {
+        const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(songClean)}`;
+        await controller.executeTool('open_url', { url: ytUrl });
+        return `Playing ${songClean} for you, sir.`;
+      }
+    }
+  }
+
+  // Do NOT intercept other complex multi-step code generation or orchestration commands
+  if (/\b(and then|and close)\b/i.test(text)) {
     return null;
   }
 
@@ -264,6 +435,31 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     return `Searching Google for ${q} in your browser, sir.`;
   }
 
+  // 4b. Jarvis Backend & Security Audit commands ("check the backend", "run a security check", "check backend security", "audit security")
+  const securityMatch = text.match(
+    /^(?:check(?: the)? backend(?: security)?|run(?: a)? security (?:check|audit)(?: on (.+))?|audit(?: the)? backend(?: security)?(?: for (.+))?|check security(?: of (.+))?)$/i,
+  );
+  if (securityMatch) {
+    const target = (securityMatch[1] || securityMatch[2] || securityMatch[3] || '').trim();
+    logger.info(`[FAST] Jarvis backend security check: "${target || 'latest'}"`);
+    const out = JSON.parse(
+      (await controller.executeTool('delegate_to_jarvis', { action: 'audit_backend', target })).text,
+    );
+    return out.spokenSummary || out.summary || 'Security audit complete, sir.';
+  }
+
+  // 4c. Ultron Holographic HUD Window Controls ("open UI", "show HUD", "open dashboard", "hide UI", "close HUD")
+  if (/^(?:open|show|launch)(?: the)? (?:ui|hud|dashboard|interface|hologram|holographic hud)$/i.test(text)) {
+    openHudWindow();
+    return 'Opening Ultron Holographic HUD on your desktop, sir.';
+  }
+  if (/^(?:close|hide|minimize)(?: the)? (?:ui|hud|dashboard|interface|hologram|holographic hud)$/i.test(text)) {
+    if (controller.hudServer) {
+      controller.hudServer.broadcast('minimize_hud', {});
+    }
+    return 'Hiding HUD, sir. Ultron is running 24/7 in the background and standing by for your voice commands.';
+  }
+
   // 5. Open Apps or Popular Websites
   const openMatch = text.match(/^(?:open|launch|start|run)\s+(?:the\s+)?(.+)$/);
   if (openMatch) {
@@ -277,6 +473,31 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
       logger.info(`[FAST] Opening site "${target}"`);
       const out = JSON.parse((await controller.executeTool('open_url', { url: SITE_SHORTCUTS[target] })).text);
       if (out.ok) return `Opening ${target}, sir.`;
+    }
+  }
+
+  // 5b. WhatsApp Messaging ("open whatsapp search John and message him hello", "send whatsapp message to mom saying i will be home late")
+  const waMatch =
+    text.match(
+      /^(?:open\s+whatsapp\s+)?search\s+([a-zA-Z0-9\s+]+?)\s+(?:and\s+)?(?:message|tell|send|text)(?:\s+(?:her|him|them|to))?\s+(?:that\s+|saying\s+)?(.+)$/i,
+    ) ||
+    text.match(
+      /^(?:send\s+(?:an?\s+)?whatsapp(?:\s+message)?\s+to\s+)([a-zA-Z0-9\s+]+?)\s+(?:saying|that|with message)\s+(.+)$/i,
+    ) ||
+    text.match(
+      /^(?:message|text)\s+([a-zA-Z0-9\s+]+?)\s+on\s+whatsapp\s+(?:saying\s+|that\s+)?(.+)$/i,
+    ) ||
+    text.match(
+      /^whatsapp\s+([a-zA-Z0-9\s+]+?)\s+(?:that\s+|saying\s+)?(.+)$/i,
+    );
+
+  if (waMatch) {
+    const contact = waMatch[1].trim();
+    const msg = waMatch[2].trim();
+    if (contact && msg) {
+      logger.info(`[FAST] WhatsApp message to "${contact}": "${msg}"`);
+      await controller.executeTool('send_whatsapp_message', { contact, message: msg });
+      return `Sending WhatsApp message to ${contact}, sir: "${msg}".`;
     }
   }
 

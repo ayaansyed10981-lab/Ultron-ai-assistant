@@ -112,20 +112,30 @@ function buildKeywordsFile(wakeWords) {
   safeAdd(`${BPE}HE Y ${BPE}A L T RO N @Hey_Ultron`);
   safeAdd(`${BPE}OKAY ${BPE} UL T RO N @Okay_Ultron`);
 
-  // Agent Vision (Coding & SQL Specialist) - Exact Zipformer BPE tokens
+  // Agent Vision (Coding & SQL Specialist) - Requires intentional prefix to prevent false triggers during calls
   safeAdd(`${BPE}HE Y ${BPE}VI S ION @Hey_Vision`);
-  safeAdd(`${BPE}VI S ION @Vision`);
   safeAdd(`${BPE}OKAY ${BPE}VI S ION @Okay_Vision`);
 
-  // Agent Friday (Word & PDF Specialist) - Exact Zipformer BPE tokens (NO "Doc" or "Writer" to prevent false triggers!)
+  // Agent Friday (Word & PDF Specialist) - Requires intentional prefix so weekday "Friday" in calls never triggers
   safeAdd(`${BPE}HE Y ${BPE}F RI DAY @Hey_Friday`);
-  safeAdd(`${BPE}F RI DAY @Friday`);
   safeAdd(`${BPE}OKAY ${BPE}F RI DAY @Okay_Friday`);
 
-  // Agent Jarvis (QA & System Inspector Specialist) - Exact Zipformer BPE tokens
+  // Agent Jarvis (QA & System Inspector Specialist)
   safeAdd(`${BPE}HE Y ${BPE}JA R VI S @Hey_Jarvis`);
-  safeAdd(`${BPE}JA R VI S @Jarvis`);
   safeAdd(`${BPE}OKAY ${BPE}JA R VI S @Okay_Jarvis`);
+
+  // Agent Veronica (Visual Media & Video Specialist)
+  safeAdd(`${BPE}HE Y ${BPE}VER ON IC A @Hey_Veronica`);
+  safeAdd(`${BPE}OKAY ${BPE}VER ON IC A @Okay_Veronica`);
+
+  // Instant Interruption & Barge-in Keywords (Immediate speech cutoff when user says Stop, Wait, Cancel, Listen)
+  safeAdd(`${BPE}ST O P @Stop`);
+  safeAdd(`${BPE}WA IT @Wait`);
+  safeAdd(`${BPE}CAN CE L @Cancel`);
+  safeAdd(`${BPE}LI S TE N @Listen`);
+  safeAdd(`${BPE}PA US E @Pause`);
+  safeAdd(`${BPE}QU I ET @Quiet`);
+  safeAdd(`${BPE}HA L T @Halt`);
 
   const kwFile = path.join(TEMP_DIR, 'ultron_keywords.txt');
   fs.writeFileSync(kwFile, `${Array.from(lines).join('\n')}\n`, 'utf8');
@@ -143,6 +153,7 @@ export class AudioOutputWorker {
     this.nextId = 1;
     this.readyPromise = null;
     this.stopping = false;
+    this.isSpeaking = false;
   }
 
   async start() {
@@ -217,15 +228,49 @@ export class AudioOutputWorker {
     });
   }
 
+  async stopPlayback() {
+    this.isSpeaking = false;
+    for (const [id, { resolve }] of this.pending) {
+      resolve({ id, ok: true, interrupted: true });
+    }
+    this.pending.clear();
+
+    const oldProc = this.proc;
+    this.proc = null;
+    this.readyPromise = null;
+
+    if (oldProc) {
+      oldProc.removeAllListeners('exit');
+      try {
+        oldProc.stdin.write(`${JSON.stringify({ id: 0, action: 'stop' })}\n`, 'utf8');
+      } catch {
+        // ignore
+      }
+      try {
+        oldProc.kill();
+      } catch {
+        // ignore
+      }
+    }
+
+    // Immediately pre-warm replacement worker in background so it is ready when user finishes speaking
+    this.start().catch(() => {});
+  }
+
   async playWavFile(filePath) {
-    await this._send({ action: 'play', path: filePath });
+    this.isSpeaking = true;
+    try {
+      return await this._send({ action: 'play', path: filePath });
+    } finally {
+      this.isSpeaking = false;
+    }
   }
 
   async playWavBuffer(wavBuffer) {
     const tmpPath = path.join(TEMP_DIR, `tts_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.wav`);
     fs.writeFileSync(tmpPath, wavBuffer);
     try {
-      await this.playWavFile(tmpPath);
+      return await this.playWavFile(tmpPath);
     } finally {
       try {
         fs.unlinkSync(tmpPath);
@@ -246,6 +291,9 @@ export class AudioOutputWorker {
     if (norm === 'jarvis' || norm === 'inspector' || norm === 'qa') {
       return { windowsVoice: 'David', geminiVoice: 'Charon' }; // Jarvis: Articulate British quality auditor
     }
+    if (norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video') {
+      return { windowsVoice: 'Zira', geminiVoice: 'Kore' }; // Veronica: Generative visual media director
+    }
     return {
       windowsVoice: this.config.windowsTtsVoice || 'Mark',
       geminiVoice: this.config.geminiTtsVoice || 'Fenrir',
@@ -254,7 +302,12 @@ export class AudioOutputWorker {
 
   async speakWindows(text, voice = this.config.windowsTtsVoice) {
     if (!text || !text.trim()) return;
-    await this._send({ action: 'speak', text, voice });
+    this.isSpeaking = true;
+    try {
+      return await this._send({ action: 'speak', text, voice });
+    } finally {
+      this.isSpeaking = false;
+    }
   }
 
   async wakeReply() {
@@ -270,7 +323,9 @@ export class AudioOutputWorker {
           ? 'friday'
           : norm === 'jarvis' || norm === 'inspector' || norm === 'qa'
             ? 'jarvis'
-            : 'ultron';
+            : norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video'
+              ? 'veronica'
+              : 'ultron';
     await this._send({ action: 'wake_reply', agent: targetAgent });
   }
 
@@ -330,10 +385,17 @@ export class WakeWordListener extends EventEmitter {
     this.voiceProfile = new VoiceProfileManager();
     this.activeRecording = null;
     this.ambientRms = 35;
+    this.bargeIn = false;
+    this.bargeInVoiceFrames = 0;
 
     // Standby pre-roll + speech-burst buffer for Whisper + Personal Voice Fingerprint wake spotting
     this.preRollChunks = [];
     this.standbyBurst = null;
+  }
+
+  setBargeIn(active) {
+    this.bargeIn = Boolean(active);
+    this.bargeInVoiceFrames = 0;
   }
 
   setLocalStt(localStt) {
@@ -432,7 +494,7 @@ export class WakeWordListener extends EventEmitter {
 
     const sampleCount = buf.length / 2;
 
-    // Mode 1: Recording a user command with adaptive RMS VAD + silence trimming
+    // Mode 1: Recording a user command with dual-threshold hysteresis VAD + generous pause tolerance
     if (this.activeRecording) {
       const rec = this.activeRecording;
 
@@ -447,7 +509,12 @@ export class WakeWordListener extends EventEmitter {
       const chunkMs = (sampleCount / SAMPLE_RATE) * 1000;
       rec.elapsedMs += chunkMs;
 
-      const isSpeech = rms >= rec.effectiveThreshold;
+      // Hysteresis VAD:
+      // Start of speech requires effectiveThreshold (e.g. 200-240) to prevent background clicks.
+      // Once speech has started, continueThreshold (~50% of threshold) keeps quiet words, unvoiced
+      // consonants ('s', 'th', 'f'), and trailing syllables alive so they are never falsely treated as silence!
+      const currentThreshold = rec.heardSpeech ? rec.continueThreshold : rec.effectiveThreshold;
+      const isSpeech = rms >= currentThreshold;
       rec.chunks.push({ buf: Buffer.from(buf), isSpeech });
 
       if (isSpeech) {
@@ -470,8 +537,8 @@ export class WakeWordListener extends EventEmitter {
       return;
     }
 
-    // Mode 2: Paused or muted (discard audio so Jarvis never hears itself)
-    if (this.paused || this.muted || !this.kws || !this.kwsStream) {
+    // Mode 2: Muted, or paused WITHOUT barge-in (discard audio so Jarvis never hears itself)
+    if (this.muted || (this.paused && !this.bargeIn) || !this.kws || !this.kwsStream) {
       return;
     }
 
@@ -522,27 +589,61 @@ export class WakeWordListener extends EventEmitter {
       if (res && res.keyword && res.keyword.trim() !== '') {
         this.kws.reset(this.kwsStream);
         const now = Date.now();
-        if (now - this.lastWakeAt > 1200) {
+        if (now - this.lastWakeAt > 800) {
           this.lastWakeAt = now;
-          this.paused = true;
-          this.standbyBurst = null;
-          triggeredByKws = true;
           let targetAgent = 'ultron';
           const kwLower = res.keyword.toLowerCase();
           if (kwLower.includes('vision')) targetAgent = 'vision';
           else if (kwLower.includes('friday')) targetAgent = 'friday';
           else if (kwLower.includes('jarvis')) targetAgent = 'jarvis';
-          this.emit('wake', {
-            text: res.keyword.replace(/_/g, ' '),
-            inlineCommand: '',
-            engine: 'kws',
-            targetAgent,
-          });
-          break;
+          else if (kwLower.includes('veronica')) targetAgent = 'veronica';
+
+          const isStopWord = /^(?:stop|wait|pause|quiet|cancel|listen|halt)$/i.test(res.keyword);
+
+          if (this.bargeIn) {
+            this.emit('barge_in', {
+              text: res.keyword.replace(/_/g, ' '),
+              isStopWord,
+              targetAgent,
+              engine: 'kws',
+            });
+            break;
+          } else {
+            this.paused = true;
+            this.standbyBurst = null;
+            triggeredByKws = true;
+            this.emit('wake', {
+              text: res.keyword.replace(/_/g, ' '),
+              inlineCommand: '',
+              engine: 'kws',
+              targetAgent,
+            });
+            break;
+          }
         }
       }
     }
     if (triggeredByKws) return;
+
+    // Barge-in VAD Voice Activity: If user speaks clearly into mic (>450 RMS for 2 frames) while agent speaks
+    if (this.bargeIn && standRms > 450) {
+      this.bargeInVoiceFrames = (this.bargeInVoiceFrames || 0) + 1;
+      if (this.bargeInVoiceFrames >= 2) {
+        this.bargeInVoiceFrames = 0;
+        const now = Date.now();
+        if (now - this.lastWakeAt > 800) {
+          this.lastWakeAt = now;
+          this.emit('barge_in', {
+            text: 'user_speaking',
+            isVoiceActivity: true,
+            targetAgent: 'ultron',
+            engine: 'vad',
+          });
+        }
+      }
+    } else {
+      this.bargeInVoiceFrames = 0;
+    }
 
     // Engine B: Moonshine-Tiny 35ms Speech-Burst Wake Spotter (handles all accents + "Hey Jarvis <command>"!)
     if (!this.localStt) return;
@@ -568,8 +669,9 @@ export class WakeWordListener extends EventEmitter {
         this.standbyBurst.silenceMs += chunkMs;
       }
 
-      // Decode burst once user pauses for 360ms (or reaches 4.5s max)
-      if (this.standbyBurst.silenceMs >= 360 || this.standbyBurst.totalMs >= 4500) {
+      // Decode burst once user pauses for 950ms (or reaches 14s max duration)
+      // Increasing silence from 360ms to 950ms prevents mid-sentence breaths from prematurely splitting speech!
+      if (this.standbyBurst.silenceMs >= 950 || this.standbyBurst.totalMs >= 14000) {
         const burst = this.standbyBurst;
         this.standbyBurst = null;
 
@@ -607,30 +709,56 @@ export class WakeWordListener extends EventEmitter {
               const assembleMatch = transcript.match(
                 /\b(?:(?:hey|okay|ok|hi)?\s+)?(?:avengers?\s+assemble|assemble\s+the\s+team|team\s+assemble|assemble|roll\s*call)\b/i,
               );
-              // 1. Check Agent Vision (Coding & SQL Specialist - including common accent spellings)
+              // 1. Check Agent Vision (Coding & SQL Specialist - strict intentional addressing)
               const visionMatch = transcript.match(
-                /\b(?:(?:hey|okay|ok|hi|hello)\s+)?(?:vision|vizion|vishon|vison|vishan|region|legion|vyram|revision)\b/i,
+                /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:vision|vizion|vishon|vison)\b|^(?:vision|vizion|vishon|vison)[\s,.:!?-]/i,
               );
-              // 2. Check Agent Friday (Word & PDF Specialist - strict Friday words to eliminate false triggers)
+              // 2. Check Agent Friday (Word & PDF Specialist - strict intentional addressing, never "on Friday" or "by Friday")
               const fridayMatch = transcript.match(
-                /\b(?:(?:hey|okay|ok|hi|hello)\s+)?(?:friday|fryday|fry\s*day)\b/i,
+                /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:friday|fryday)\b|^(?:friday|fryday)[\s,.:!?-]/i,
               );
-              // 3. Check Agent Jarvis (QA & System Inspector Specialist)
+              // 3. Check Agent Jarvis (QA & System Inspector Specialist - strict, no "service")
               const jarvisMatch = transcript.match(
-                /\b(?:(?:hey|okay|ok|hi|hello)\s+)?(?:jarvis|charvis|jarviss|jarviz|service|darvis)\b/i,
+                /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:jarvis|charvis|jarviz)\b|^(?:jarvis|charvis|jarviz)[\s,.:!?-]/i,
               );
-              // 4. Check Commander Ultron
+              // 4. Check Agent Veronica (Visual Media & Video Specialist - strict, no "media" or "creative")
+              const veronicaMatch = transcript.match(
+                /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:veronica|varonica|veronika)\b|^(?:veronica|varonica|veronika)[\s,.:!?-]/i,
+              );
+              // 5. Check Commander Ultron (strict, no "electron" or "ultra on")
               const ultronMatch = transcript.match(
-                /\b(?:ultron|altron|eltron|oltron|antron|electron|ultram|altram|a[\s-]+a[\s-]+tron|ultra\s*on|all\s*tron|alt\s*ron|(?:hey|here|ok|okay|we\s+are)\s*,?\s*(?:ultron|altron|tron|anton|antron|ultra\w*)|altern\w*)\b/i,
+                /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:ultron|altron|oltron|eltron)\b|^(?:ultron|altron|oltron|eltron)[\s,.:!?-]?/i,
               );
+
+              // Intentional addressing check: Must be at the start of speech (<= 6 chars) or explicitly preceded by a greeting
+              // This strictly prevents in-call conversational speech (e.g. "our vision", "by Friday") from false triggering!
+              const isDirectlyAddressed = (m) => {
+                if (!m) return false;
+                if (m.index <= 6) return true;
+                const prefix = transcript.slice(0, m.index).trim().toLowerCase();
+                return /\b(hey|ok|okay|hi|hello|yo)$/.test(prefix);
+              };
 
               // Rank matches by position so the wake word that appears earliest (at the start of speech) wins!
               const candidates = [];
-              if (assembleMatch) candidates.push({ agent: 'ultron', match: assembleMatch, index: assembleMatch.index, minCommandLen: 0, forceCommand: 'avengers assemble' });
-              if (visionMatch) candidates.push({ agent: 'vision', match: visionMatch, index: visionMatch.index, minCommandLen: 3 });
-              if (fridayMatch) candidates.push({ agent: 'friday', match: fridayMatch, index: fridayMatch.index, minCommandLen: 3 });
-              if (jarvisMatch) candidates.push({ agent: 'jarvis', match: jarvisMatch, index: jarvisMatch.index, minCommandLen: 3 });
-              if (ultronMatch) candidates.push({ agent: 'ultron', match: ultronMatch, index: ultronMatch.index, minCommandLen: 4 });
+              if (assembleMatch && isDirectlyAddressed(assembleMatch)) {
+                candidates.push({ agent: 'ultron', match: assembleMatch, index: assembleMatch.index, minCommandLen: 0, forceCommand: 'avengers assemble' });
+              }
+              if (visionMatch && isDirectlyAddressed(visionMatch)) {
+                candidates.push({ agent: 'vision', match: visionMatch, index: visionMatch.index, minCommandLen: 3 });
+              }
+              if (fridayMatch && isDirectlyAddressed(fridayMatch)) {
+                candidates.push({ agent: 'friday', match: fridayMatch, index: fridayMatch.index, minCommandLen: 3 });
+              }
+              if (jarvisMatch && isDirectlyAddressed(jarvisMatch)) {
+                candidates.push({ agent: 'jarvis', match: jarvisMatch, index: jarvisMatch.index, minCommandLen: 3 });
+              }
+              if (veronicaMatch && isDirectlyAddressed(veronicaMatch)) {
+                candidates.push({ agent: 'veronica', match: veronicaMatch, index: veronicaMatch.index, minCommandLen: 3 });
+              }
+              if (ultronMatch && isDirectlyAddressed(ultronMatch)) {
+                candidates.push({ agent: 'ultron', match: ultronMatch, index: ultronMatch.index, minCommandLen: 3 });
+              }
 
               if (candidates.length > 0) {
                 candidates.sort((a, b) => a.index - b.index);
@@ -642,7 +770,23 @@ export class WakeWordListener extends EventEmitter {
                 } else {
                   const afterIdx = winner.match.index + winner.match[0].length;
                   const trailing = transcript.slice(afterIdx).replace(/^[\s,.:!?-]+/, '').trim();
-                  if (trailing.length >= winner.minCommandLen) inlineCommand = trailing;
+                  if (trailing.length >= winner.minCommandLen) {
+                    // Check if trailing words look like an incomplete command / open-ended sentence
+                    const isIncomplete =
+                      /\b(and|then|to|that|saying|with|for|about|tell|message|text|search|write|create|send|or|in|at|on)$/i.test(
+                        trailing,
+                      ) ||
+                      (/^(?:open\s+whatsapp\s+search|search|tell|message)\b/i.test(trailing) &&
+                        trailing.split(/\s+/).length < 4);
+
+                    if (!isIncomplete) {
+                      inlineCommand = trailing;
+                    } else {
+                      logger.info(
+                        `[BURST] Incomplete trailing phrase detected: "${trailing}". Waking up cleanly to record full command.`,
+                      );
+                    }
+                  }
                 }
               }
 
@@ -662,25 +806,50 @@ export class WakeWordListener extends EventEmitter {
 
             if (matched) {
               const now = Date.now();
-              if (now - this.lastWakeAt > 1200) {
+              if (now - this.lastWakeAt > 800) {
                 this.lastWakeAt = now;
-                this.paused = true;
-                try {
-                  this.kws.reset(this.kwsStream);
-                } catch {
-                  // ignore
-                }
                 const targetAgent = this._lastTargetAgent || 'ultron';
                 const displayName = targetAgent.charAt(0).toUpperCase() + targetAgent.slice(1);
-                this.emit('wake', {
-                  text: isNonSpeech ? `Hey ${displayName} (Voice Match)` : transcript,
-                  inlineCommand,
-                  engine: matchEngine,
-                  targetAgent,
-                });
+                if (this.bargeIn) {
+                  this.emit('barge_in', {
+                    text: isNonSpeech ? `Hey ${displayName}` : transcript,
+                    inlineCommand,
+                    isStopWord: false,
+                    targetAgent,
+                    engine: matchEngine,
+                  });
+                } else {
+                  this.paused = true;
+                  try {
+                    this.kws.reset(this.kwsStream);
+                  } catch {
+                    // ignore
+                  }
+                  this.emit('wake', {
+                    text: isNonSpeech ? `Hey ${displayName} (Voice Match)` : transcript,
+                    inlineCommand,
+                    engine: matchEngine,
+                    targetAgent,
+                  });
+                }
               }
             } else if (!isNonSpeech && transcript.length >= 2) {
-              logger.info(`[STANDBY] Heard (no wake word): "${transcript}"`);
+              if (this.bargeIn) {
+                const now = Date.now();
+                if (now - this.lastWakeAt > 800) {
+                  this.lastWakeAt = now;
+                  const isStop = /^(?:stop|wait|pause|quiet|cancel|nevermind|halt|hold on|shh|shut up)/i.test(transcript);
+                  this.emit('barge_in', {
+                    text: transcript,
+                    inlineCommand: transcript,
+                    isStopWord: isStop,
+                    targetAgent: this._lastTargetAgent || 'ultron',
+                    engine: matchEngine,
+                  });
+                }
+              } else {
+                logger.info(`[STANDBY] Heard (no wake word): "${transcript}"`);
+              }
             }
           }
         }
@@ -708,9 +877,10 @@ export class WakeWordListener extends EventEmitter {
     }
 
     const effectiveThreshold = Math.min(
-      650,
-      Math.max(vadThreshold, Math.round(this.ambientRms * 2.2 + 120)),
+      520,
+      Math.max(vadThreshold, Math.round(this.ambientRms * 2.0 + 80)),
     );
+    const continueThreshold = Math.max(70, Math.round(effectiveThreshold * 0.50));
 
     return new Promise((resolve) => {
       const safetyTimer = setTimeout(() => {
@@ -724,6 +894,7 @@ export class WakeWordListener extends EventEmitter {
         maxDurationMs,
         vadThreshold,
         effectiveThreshold,
+        continueThreshold,
         chunks: [],
         heardSpeech: false,
         speechFrames: 0,
@@ -743,15 +914,15 @@ export class WakeWordListener extends EventEmitter {
     clearTimeout(rec.safetyTimer);
 
     if (ok && rec.heardSpeech && rec.chunks.length > 0) {
-      // Trim leading and trailing silence (keep 3 chunks = ~240ms padding)
+      // Trim leading and trailing silence (keep ~400ms leading, ~480ms trailing padding so final words are never clipped!)
       let firstIdx = rec.chunks.findIndex((c) => c.isSpeech);
       let lastIdx = rec.chunks.length - 1;
       while (lastIdx > firstIdx && !rec.chunks[lastIdx].isSpeech) {
         lastIdx--;
       }
       if (firstIdx < 0) firstIdx = 0;
-      const start = Math.max(0, firstIdx - 3);
-      const end = Math.min(rec.chunks.length, lastIdx + 4);
+      const start = Math.max(0, firstIdx - 4);
+      const end = Math.min(rec.chunks.length, lastIdx + 6);
       const trimmedBuffers = rec.chunks.slice(start, end).map((c) => c.buf);
       const pcm = Buffer.concat(trimmedBuffers);
 

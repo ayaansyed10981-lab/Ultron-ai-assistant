@@ -83,7 +83,7 @@ echo.
 
 :: 5. Commit
 echo [+] Creating commit...
-"%GIT_CMD%" commit -m "Update Ultron Multi-Agent Team: Vision, Friday, Jarvis, Avengers assemble, and parallel execution"
+"%GIT_CMD%" commit -m "Add direct song playback, open-and-write app automation, barge-in speech interruption, and Holographic HUD"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo [i] Note: Working tree is clean or already committed.

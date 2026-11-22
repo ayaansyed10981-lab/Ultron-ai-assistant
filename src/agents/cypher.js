@@ -15,7 +15,7 @@ function slugify(name) {
 }
 
 /**
- * Agent Vision: Chief Software Engineer & SQL Database Architect
+ * Agent Vision: Chief Software Engineer & Full-Stack Backend Architect
  */
 export class CypherAgent {
   constructor(geminiEngine) {
@@ -26,10 +26,21 @@ export class CypherAgent {
   }
 
   /**
-   * Autonomous Coding & Project Generation
+   * Autonomous Coding & Project Generation (Frontend, Full-Stack, or Routing to Backend)
    */
   async buildProject(args) {
-    logger.info(`[VISION] Initiating software engineering for: "${args.prompt}"`);
+    const prompt = String(args?.prompt || '').trim();
+    const isBackend =
+      args?.action === 'backend' ||
+      /\b(backend|rest\s*api|api\s*server|express\s*server|fastapi|flask\s*app|microservice|crud\s*api|server\.js|database\s*api)\b/i.test(
+        prompt,
+      );
+
+    if (isBackend) {
+      return this.buildBackend(args);
+    }
+
+    logger.info(`[VISION] Initiating software engineering for: "${prompt}"`);
     const result = await generateAndBuildProject(this.gemini, args);
     return {
       agent: this.name,
@@ -37,6 +48,137 @@ export class CypherAgent {
       ...result,
       agentNote: `Vision completed code generation for: ${result.projectName || 'project'}.`,
     };
+  }
+
+  /**
+   * Autonomous Backend & REST / Microservice API Architecture
+   * Builds complete production-grade backend servers with routes, auth, middleware, DB connections, and test scripts.
+   */
+  async buildBackend(args) {
+    const prompt = String(args.prompt || '').trim();
+    const stack = String(args.stack || args.framework || 'node-express').trim().toLowerCase();
+    const database = String(args.database || 'sqlite').trim().toLowerCase();
+    const auth = String(args.auth || 'jwt').trim().toLowerCase();
+    const port = Number.parseInt(args.port, 10) || (stack.includes('python') || stack.includes('fastapi') || stack.includes('flask') ? 8000 : 3000);
+
+    if (!prompt) {
+      return { ok: false, error: 'A backend or API specification is required.' };
+    }
+
+    logger.info(`[VISION] Engineering full-stack backend API for: "${prompt}" [Stack: ${stack}, DB: ${database}, Auth: ${auth}]`);
+
+    const schema = {
+      type: 'object',
+      properties: {
+        project_name: {
+          type: 'string',
+          description: 'Short hyphenated lowercase folder name (e.g. auth-rest-api, ecommerce-backend).',
+        },
+        architecture_title: {
+          type: 'string',
+          description: 'Descriptive title for the backend architecture.',
+        },
+        stack_used: {
+          type: 'string',
+          description: 'Framework and runtime used (e.g. Node.js / Express ES Modules, Python / FastAPI).',
+        },
+        endpoints: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              method: { type: 'string', description: 'HTTP method (GET, POST, PUT, DELETE, PATCH).' },
+              path: { type: 'string', description: 'Endpoint route path (e.g. /api/auth/login).' },
+              description: { type: 'string', description: 'Summary of what this endpoint does.' },
+              auth_required: { type: 'boolean', description: 'Whether JWT / auth middleware is required.' },
+            },
+            required: ['method', 'path', 'description'],
+          },
+        },
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Relative file path (e.g. server.js, routes/auth.js, middleware/auth.js, package.json).' },
+              content: { type: 'string', description: 'Complete, production-ready source code with zero TODOs or placeholders.' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+        summary: {
+          type: 'string',
+          description: 'One concise spoken sentence summarizing what Vision engineered (no markdown).',
+        },
+      },
+      required: ['project_name', 'architecture_title', 'stack_used', 'endpoints', 'files', 'summary'],
+    };
+
+    const systemPrompt = [
+      'You are Vision, Chief Software Engineer & Full-Stack Backend Architect serving with Commander Ultron.',
+      'You engineer production-grade, highly secure, modular, and maintainable backend servers and REST APIs.',
+      'Architecture Rules:',
+      '- Produce a clean, modular structure: entry point (server.js or main.py), routes/, controllers/ or services/, middleware/, config/ (database), and dependency manifest.',
+      '- Security Best Practices: Use parameterized database queries (NEVER raw string concatenation for SQL), robust input validation, secure password hashing (bcrypt), JWT auth middleware with expiration, CORS configuration, and security headers (Helmet for Express).',
+      '- Provide package.json (with "start", "dev", "test" scripts and dependencies) for Node, or requirements.txt for Python.',
+      '- Provide a .env.example file with all necessary configuration variables.',
+      '- Provide a README.md detailing every API route with exact curl commands to test them.',
+      '- Provide an automated test script (test.js or test_api.py) that verifies the endpoints.',
+      '- All code must be complete, runnable, and syntactically flawless with ZERO placeholders.',
+      `Requested Stack: ${stack}. Database: ${database}. Authentication: ${auth}. Default Port: ${port}.`,
+    ].join('\n');
+
+    try {
+      const rawResult = await this.gemini.generateStructuredJson(
+        `Engineer the production-grade backend API architecture for this specification:\n\n"${prompt}"`,
+        schema,
+        systemPrompt,
+      );
+
+      let data;
+      try {
+        data = JSON.parse(rawResult);
+      } catch {
+        const cleaned = rawResult.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+        data = JSON.parse(cleaned);
+      }
+
+      const folderSlug = slugify(args.project_name || data.project_name || 'backend-api');
+      const projectDir = path.join(PROJECTS_DIR, folderSlug);
+      fs.mkdirSync(projectDir, { recursive: true });
+
+      const writtenFiles = [];
+      for (const f of data.files || []) {
+        const rel = String(f.path || '').replace(/^[/\\]+/, '').replace(/\.\./g, '');
+        const fullPath = path.join(projectDir, rel);
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, String(f.content ?? ''), 'utf8');
+        writtenFiles.push(rel);
+      }
+
+      logger.info(`[VISION] Backend project created in ${projectDir} (${writtenFiles.length} files).`);
+
+      return {
+        ok: true,
+        agent: this.name,
+        specialty: 'Full-Stack Backend Architecture',
+        title: data.architecture_title,
+        projectName: folderSlug,
+        projectDir,
+        stack: data.stack_used,
+        endpoints: data.endpoints,
+        files: writtenFiles,
+        summary: data.summary,
+        spokenSummary: `Vision engineered your full-stack backend API for ${data.architecture_title}, sir. Built with ${data.stack_used}, including ${data.endpoints.length} endpoints, security middleware, and tests. Saved in your UltronProjects folder.`,
+      };
+    } catch (err) {
+      logger.error(`[VISION] Backend engineering failed: ${err.message}`);
+      return {
+        ok: false,
+        agent: this.name,
+        error: err.message,
+      };
+    }
   }
 
   /**
