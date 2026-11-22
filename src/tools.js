@@ -11,6 +11,8 @@ import {
   readWordDocument,
   appendToWordDocument,
   generateAiWordDocument,
+  editWordDocument,
+  findExistingWordDocument,
   listWordDocuments,
   openInWord,
   resolveWordDocPath,
@@ -519,18 +521,26 @@ export class ComputerController {
         type: 'function',
         name: 'word_document_manager',
         description:
-          'Create, edit, append to, read, or list Microsoft Word documents (.docx). Use this whenever the user asks to create a Word document, write a report/proposal/letter/resume in Word, read or summarize a .docx file, or edit an existing Word document. Documents are saved in ~/UltronDocuments and automatically opened in Microsoft Word.',
+          'Create, edit, update, append to, read, or list Microsoft Word documents (.docx). Use this whenever the user asks to create a Word document, edit or update an existing Word document by name, append content to a document, read or summarize a .docx file, or list saved documents. When editing, documents are safely resolved even by partial or spoken names, updated, and automatically opened in Microsoft Word.',
         parameters: {
           type: 'object',
           properties: {
             operation: {
               type: 'string',
-              enum: ['create', 'read', 'append', 'list', 'open'],
-              description: 'The Word document operation to perform.',
+              enum: ['create', 'edit', 'update', 'append', 'read', 'list', 'open'],
+              description: 'The Word document operation to perform. Use "edit" or "update" to modify or append to an existing document by name.',
             },
             prompt: {
               type: 'string',
-              description: 'Description or topic of the Word document to write when creating with AI.',
+              description: 'Description or topic of the Word document to write when creating with AI, or edit instructions.',
+            },
+            document_name: {
+              type: 'string',
+              description: 'Name or partial title of the existing Word document to edit, update, or read (e.g. "Project Proposal", "meeting notes").',
+            },
+            instructions: {
+              type: 'string',
+              description: 'Specific editing instructions or additions to apply to the existing document.',
             },
             title: {
               type: 'string',
@@ -542,7 +552,7 @@ export class ComputerController {
             },
             file_path: {
               type: 'string',
-              description: 'Path or filename of the Word document when reading, appending, or opening.',
+              description: 'Path or filename of the Word document when reading, editing, appending, or opening.',
             },
             content: {
               type: 'string',
@@ -605,13 +615,38 @@ export class ComputerController {
         type: 'function',
         name: 'delegate_to_scribe',
         description:
-          'Deploy Agent Friday (Executive Document Architect) to create, format, read, or summarize Microsoft Word (.docx) documents and executive PDF (.pdf) reports. Documents are saved in ~/UltronDocuments and opened in Word or PDF viewer.',
+          'Deploy Agent Friday (Executive Document Architect) to create, edit, update, append to, read, or summarize Microsoft Word (.docx) documents and executive PDF (.pdf) reports. When asked to edit or update an existing document by name, Friday locates it (using smart fuzzy matching even for partial or spoken names), integrates your requested changes or additions, and automatically opens the updated document in Microsoft Word.',
         parameters: {
           type: 'object',
           properties: {
+            action: {
+              type: 'string',
+              enum: ['create', 'edit', 'update', 'append', 'read', 'list'],
+              description: 'Action to perform: "edit" or "update" to modify an existing document by name, "create" for a new document, "read" to inspect.',
+            },
             prompt: {
               type: 'string',
-              description: 'Detailed description or topic of the document or report to create.',
+              description: 'Detailed description of the document to create or the editing instructions.',
+            },
+            document_name: {
+              type: 'string',
+              description: 'Name or partial title of the existing Word document to edit, update, or read (e.g. "Project Proposal", "meeting notes", "report.docx").',
+            },
+            file_path: {
+              type: 'string',
+              description: 'Path or filename of the document.',
+            },
+            edit_instructions: {
+              type: 'string',
+              description: 'Specific additions, sections, modifications, or updates to make to the existing document.',
+            },
+            content: {
+              type: 'string',
+              description: 'Direct text or content to add or append to the document.',
+            },
+            heading: {
+              type: 'string',
+              description: 'Section heading for new or edited content.',
             },
             format: {
               type: 'string',
@@ -988,13 +1023,24 @@ export class ComputerController {
             });
             return { text: JSON.stringify(res) };
           }
+          if (op === 'edit' || op === 'update') {
+            const res = await editWordDocument(this.geminiEngine, {
+              documentName: args.document_name || args.file_path || args.filename,
+              filePath: args.file_path || args.filename,
+              instructions: args.instructions || args.prompt || args.content,
+              content: args.content,
+              heading: args.heading,
+              openAfter: true,
+            });
+            return { text: JSON.stringify(res) };
+          }
           if (op === 'read') {
-            const res = await readWordDocument(args.file_path || args.filename);
+            const res = await readWordDocument(args.file_path || args.filename || args.document_name);
             return { text: JSON.stringify(res) };
           }
           if (op === 'append') {
             const res = await appendToWordDocument({
-              filePath: args.file_path || args.filename,
+              filePath: args.file_path || args.filename || args.document_name,
               newHeading: args.heading || '',
               content: args.content || '',
               openAfter: true,
@@ -1006,9 +1052,10 @@ export class ComputerController {
             return { text: JSON.stringify({ ok: true, documents: docs }) };
           }
           if (op === 'open') {
-            const target = resolveWordDocPath(args.file_path || args.filename);
+            const resolved = findExistingWordDocument(args.file_path || args.filename || args.document_name);
+            const target = resolved ? resolved.path : resolveWordDocPath(args.file_path || args.filename || args.document_name);
             const opened = await openInWord(target);
-            return { text: JSON.stringify({ ok: opened, path: target }) };
+            return { text: JSON.stringify({ ok: opened, path: target, filename: path.basename(target) }) };
           }
           throw new Error(`Unsupported word_document_manager operation: ${op}`);
         }
@@ -1041,6 +1088,29 @@ export class ComputerController {
         case 'delegate_to_scribe': {
           if (!this.orchestrator) {
             return { text: JSON.stringify({ ok: false, error: 'Agent Scribe not initialized.' }) };
+          }
+          const action = String(args.action || '').toLowerCase();
+          const docQuery = args.document_name || args.file_path || args.filename;
+          const isEdit =
+            action === 'edit' ||
+            action === 'append' ||
+            action === 'update' ||
+            (docQuery && /\b(?:edit|update|modify|change|add|append)\b/i.test(args.prompt || ''));
+
+          if (isEdit) {
+            const res = await this.orchestrator.scribe.editDocument({
+              documentName: docQuery,
+              filePath: args.file_path || args.filename,
+              instructions: args.edit_instructions || args.prompt || args.content,
+              content: args.content,
+              heading: args.heading,
+              ...args,
+            });
+            return { text: JSON.stringify(res) };
+          }
+          if (action === 'read') {
+            const res = await this.orchestrator.scribe.inspectDocument(docQuery || args.prompt);
+            return { text: JSON.stringify(res) };
           }
           const res = await this.orchestrator.scribe.generateAiDocument(args);
           return { text: JSON.stringify(res) };

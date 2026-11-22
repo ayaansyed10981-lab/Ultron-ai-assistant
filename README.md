@@ -49,9 +49,18 @@ Ultron commands specialized AI agents. You can speak to Commander Ultron to orch
 ### 3. Friday (Executive Document Architect)
 - **Voice Profile**: **Microsoft Zira** (Distinctive Female Voice) / **Gemini Aoede**
 - **Direct Wake Word**: *"Hey Friday"* or *"Friday"* -> Instant Wake Reply: *"Yes, sir? Friday here. Which document or report shall I create?"*
-- **Microsoft Word (.docx)**: Autonomously drafts, styles, and formats rich Word documents with titles, styled headings, bullet lists, and tables in `~/UltronDocuments/`.
+- **Microsoft Word (.docx) Creation & Autonomous Editing**:
+  - **Create From Scratch**: Autonomously drafts, styles, and formats rich Word documents with titles, styled headings, bullet lists, and tables in `~/UltronDocuments/`.
+  - **Fuzzy Document Name Resolution**: Locate existing documents instantly even from partial or spoken names (e.g. *"edit Project Proposal"*, *"update my meeting notes"*, *"add conclusion to test.docx"*). Automatically handles missing `.docx` extensions, underscores, dashes, spaces, and searches across `~/UltronDocuments`, `~/Documents`, `~/Desktop`, and `~/Downloads`.
+  - **Intelligent Content Updates**: Preserves 100% of existing document text and formatting while seamlessly integrating new sections, tables, paragraphs, or corrections requested by voice.
+  - **Zero-Crash Locked File Protection**: Safely handles files currently open in Microsoft Word using PowerShell COM automation and atomic fallback revisions, preventing `EBUSY` file lock crashes.
 - **Executive PDF (.pdf)**: Autonomously generates multi-page PDF reports with title banners, custom typography, table grids, headers, and footers with page numbers.
 - **Document Reading & Summarization**: Reads and extracts content from `.docx` and `.pdf` files.
+- **Instant Fast-Path Voice Commands**:
+  - *"Hey Friday, edit [Document] and add [Content]"*
+  - *"Friday, add [Content] to [Document]"*
+  - *"Friday, update [Document] with [Content]"*
+  - *"Hey Friday, open document [Document]"*
 
 ### 4. Jarvis (Chief Quality Assurance Engineer & Security Inspector)
 - **Voice Profile**: **Microsoft David** (Articulate British Quality & Security Auditor) / **Gemini Charon**

@@ -359,6 +359,98 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     }
   }
 
+  // 0.38 Direct Word Document Editing ("edit word document project proposal and add conclusion", "edit test.docx and write summary", "update notes with meeting agenda")
+  const editDocMatch = text.match(
+    /^(?:open\s+and\s+)?(?:edit|update|modify|change)\s+(?:the\s+)?(?:word\s+)?(?:document\s+|doc\s+|file\s+)?(.+?)\s+(?:and\s+)?(?:add|append|write|type|include|put|insert|note|with)(?:\s+(?:a\s+section|section|paragraph|heading|down|saying|that))?\s+(.+)$/i,
+  );
+  if (editDocMatch) {
+    const docQuery = editDocMatch[1].trim();
+    const editInstruction = editDocMatch[2].trim();
+    if (docQuery && editInstruction && !/^(?:app|code|setting|file|it)$/i.test(docQuery)) {
+      logger.info(`[FAST] Word document edit: Doc="${docQuery}", Content="${editInstruction}"`);
+      const out = JSON.parse(
+        (await controller.executeTool('delegate_to_scribe', {
+          action: 'edit',
+          document_name: docQuery,
+          edit_instructions: editInstruction,
+          prompt: `Edit document ${docQuery}: ${editInstruction}`,
+        })).text,
+      );
+      if (out.ok) {
+        return out.summary || `I have edited "${out.filename || docQuery}" and opened it in Microsoft Word, sir.`;
+      }
+      return out.error || `I could not update ${docQuery}, sir.`;
+    }
+  }
+
+  // 0.39 Direct "Add [content] to [document]"
+  const addToDocMatch = text.match(
+    /^(?:add|append|insert)\s+(.+?)\s+to\s+(?:the\s+)?(?:word\s+)?(?:document\s+|doc\s+|file\s+)?(.+)$/i,
+  );
+  if (addToDocMatch) {
+    const editInstruction = addToDocMatch[1].trim();
+    const docQuery = addToDocMatch[2].trim();
+    if (docQuery && editInstruction && !/^(?:app|queue|list|cart|favorite|playlist)$/i.test(docQuery)) {
+      logger.info(`[FAST] Add to Word document: Doc="${docQuery}", Content="${editInstruction}"`);
+      const out = JSON.parse(
+        (await controller.executeTool('delegate_to_scribe', {
+          action: 'edit',
+          document_name: docQuery,
+          edit_instructions: editInstruction,
+          prompt: `Add to document ${docQuery}: ${editInstruction}`,
+        })).text,
+      );
+      if (out.ok) {
+        return out.summary || `I have added that to "${out.filename || docQuery}" and opened it in Word, sir.`;
+      }
+      return out.error || `I could not update ${docQuery}, sir.`;
+    }
+  }
+
+  // 0.40 Direct Open Document ("open word document project proposal", "open document notes")
+  const openDocMatch = text.match(
+    /^(?:open|launch)\s+(?:the\s+)?(?:word\s+)?(?:document\s+|doc\s+|file\s+)(.+)$/i,
+  );
+  if (openDocMatch) {
+    const docQuery = openDocMatch[1].trim();
+    if (docQuery && !APP_KEYWORDS.includes(docQuery.toLowerCase())) {
+      logger.info(`[FAST] Open Word document: "${docQuery}"`);
+      const out = JSON.parse(
+        (await controller.executeTool('word_document_manager', {
+          operation: 'open',
+          file_path: docQuery,
+        })).text,
+      );
+      if (out.ok) {
+        return `Opened ${path.basename(out.path)} in Microsoft Word, sir.`;
+      }
+    }
+  }
+
+  // 0.41 Direct Edit Document Only ("edit word document project proposal", "edit document notes")
+  const editDocOnlyMatch = text.match(
+    /^(?:open\s+and\s+)?(?:edit|update)\s+(?:the\s+)?(?:word\s+)?(?:document\s+|doc\s+|file\s+)(.+)$/i,
+  );
+  if (editDocOnlyMatch) {
+    const docQuery = editDocOnlyMatch[1].trim();
+    if (
+      docQuery &&
+      !APP_KEYWORDS.includes(docQuery.toLowerCase()) &&
+      !/^(?:code|app|setting|profile)$/i.test(docQuery)
+    ) {
+      logger.info(`[FAST] Open and edit document: "${docQuery}"`);
+      const out = JSON.parse(
+        (await controller.executeTool('word_document_manager', {
+          operation: 'open',
+          file_path: docQuery,
+        })).text,
+      );
+      if (out.ok) {
+        return `I have opened "${path.basename(out.path)}" in Microsoft Word, sir. What changes or additions would you like me to make?`;
+      }
+    }
+  }
+
   // Do NOT intercept other complex multi-step code generation or orchestration commands
   if (/\b(and then|and close)\b/i.test(text)) {
     return null;

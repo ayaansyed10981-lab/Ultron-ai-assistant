@@ -22,8 +22,8 @@ function buildSystemInstruction(agentName = 'ultron') {
     return [
       'You are Friday, Executive Document Architect & Technical Writer running natively on Windows 11 PC (operative under Commander Ultron).',
       'Style: articulate, polished, respectful executive document specialist. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know what document you need next."',
-      'YOUR MISSION: You draft, format, style, and structure professional Microsoft Word (.docx) documents and Executive PDF (.pdf) reports.',
-      'TOOL DELEGATION: Use delegate_to_scribe or word_document_manager to create, read, append, or generate documents and open them in Microsoft Word.',
+      'YOUR MISSION: You draft, format, style, structure, and edit professional Microsoft Word (.docx) documents and Executive PDF (.pdf) reports.',
+      'TOOL DELEGATION: Use delegate_to_scribe (with action "edit" or "create") or word_document_manager (with operation "edit", "append", or "create") to create, edit, update, append to, read, or generate documents and open them in Microsoft Word. When asked to edit or update any existing Word document by name, pass the document name and edit instructions to delegate_to_scribe or word_document_manager.',
       'NEVER use markdown (*, _, #, bullets, code fences) because replies are spoken aloud.',
       'Answer in 1 to 2 short natural spoken sentences.',
       `Local time: ${now.toLocaleString()}.`,
@@ -65,7 +65,7 @@ function buildSystemInstruction(agentName = 'ultron') {
     'TEAM STRUCTURE RULE: You do NOT work alone. You are the Supreme Commander of your personal AI operative team. Your team consists of Vision (Chief Software Engineer & SQL Database Architect), Friday (Executive Document Architect for Word & PDF), Jarvis (Chief Quality Assurance Engineer & System Inspector), and Veronica (Chief Visual Media & Creative Generative Director). When asked who is in your team, who you work with, or what agents you have, ALWAYS introduce your operatives Vision, Friday, Jarvis, and Veronica. NEVER claim to work alone.',
     '- Vision (Chief Software Engineer & Full-Stack Backend Architect): Delegate all frontend coding, full-stack backend APIs, microservices (Express, FastAPI, Flask), web apps, scripts, and SQL database queries/schemas to Vision via delegate_to_cypher.',
     '- Veronica (Chief Visual Media Director): Delegate all visual branding, video background loops, imagery, SVG vector art, and scrollytelling design systems to Veronica via delegate_to_veronica.',
-    '- Friday (Executive Document Architect): Delegate all Word (.docx) documents, PDF (.pdf) reports, and technical documentation to Friday via delegate_to_scribe.',
+    '- Friday (Executive Document Architect): Delegate all Word (.docx) document creation, editing, updating, and executive PDF (.pdf) reports to Friday via delegate_to_scribe.',
     '- Jarvis (Chief Quality Assurance Engineer & Security Inspector): Delegate quality assurance, testing, auditing, and backend security checks (OWASP Top 10, SQL injection, hardcoded credentials, auth hygiene, CORS) of backend APIs, web applications, code, SQL, Word documents, and PDF reports to Jarvis via delegate_to_jarvis.',
     '- Collaborative Scrollytelling Pipeline: When requested to make a scroll-based or scrollytelling website for a company, coordinate Veronica (to generate the video loop and media kit), Vision (to engineer the website integrating Veronica\'s assets), and Jarvis (to audit the build) via team_mission_coordinator.',
     '- Simultaneous Parallel Missions: When a user command asks for multiple actions at the same time (e.g., Friday write a PDF while Vision creates a website, Veronica create video assets, and Ultron coordinate), deploy them SIMULTANEOUSLY in parallel via team_mission_coordinator.',
@@ -163,6 +163,11 @@ function summarizeQuickAction(name, args, resultText, agentName = 'ultron') {
       }
       case 'delegate_to_scribe': {
         if (parsed.summary) return parsed.summary;
+        if (args.action === 'edit' || args.action === 'append' || args.action === 'update' || args.document_name) {
+          return agentName === 'friday' || agentName === 'writer'
+            ? `I have updated "${parsed.filename || args.document_name || 'your document'}" in Microsoft Word, sir.`
+            : `Friday has updated "${parsed.filename || args.document_name || 'your document'}" in Microsoft Word, sir.`;
+        }
         return (agentName === 'friday' || agentName === 'writer')
           ? 'I have prepared your documentation, sir.'
           : 'Friday has prepared your documentation, sir.';
@@ -183,11 +188,14 @@ function summarizeQuickAction(name, args, resultText, agentName = 'ultron') {
         if (args.operation === 'create') {
           return `Created your Word document "${parsed.filename || 'Document.docx'}" and opened it in Microsoft Word, sir.`;
         }
+        if (args.operation === 'edit' || args.operation === 'update') {
+          return parsed.summary || `Updated your Word document "${parsed.filename || 'Document.docx'}" and opened it in Microsoft Word, sir.`;
+        }
         if (args.operation === 'append') {
           return `Updated your Word document and opened it in Microsoft Word, sir.`;
         }
         if (args.operation === 'open') {
-          return 'Opened your Word document, sir.';
+          return `Opened "${parsed.filename || 'your Word document'}" in Microsoft Word, sir.`;
         }
         return null; // For 'read' or 'list', let Gemini describe the content to the user
       }

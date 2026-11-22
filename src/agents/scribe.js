@@ -4,8 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import {
+  appendToWordDocument,
   createWordDocument,
   DOCUMENTS_DIR,
+  editWordDocument,
+  findExistingWordDocument,
   generateAiWordDocument,
   openInWord,
   readWordDocument,
@@ -316,16 +319,58 @@ export class ScribeAgent {
   }
 
   /**
+   * Edit or update an existing Word document by name or file path
+   */
+  async editDocument(options = {}) {
+    logger.info(
+      `[SCRIBE] Friday editing Word document: "${options.documentName || options.filename || options.title || options.filePath || options.file_path}"`,
+    );
+    return await editWordDocument(this.gemini, options);
+  }
+
+  /**
+   * Append content or sections to an existing Word document
+   */
+  async appendDocument(options = {}) {
+    logger.info(`[SCRIBE] Friday appending to document: "${options.filePath || options.filename}"`);
+    return await appendToWordDocument(options);
+  }
+
+  /**
    * Autonomous AI Document Generator:
    * Generates complete Word (.docx) or PDF (.pdf) or BOTH simultaneously from any voice prompt!
+   * Automatically routes to editDocument if the prompt asks to edit or update an existing document.
    */
   async generateAiDocument(args = {}) {
     const prompt = String(args.prompt || '').trim();
     const format = String(args.format || 'both').toLowerCase(); // 'docx' | 'pdf' | 'both'
     const requestedTitle = String(args.title || '').trim();
+    const action = String(args.action || args.operation || '').toLowerCase();
+    const docQuery = args.document_name || args.documentName || args.file_path || args.filename;
 
-    if (!prompt) {
+    if (!prompt && !docQuery) {
       return { ok: false, error: 'A document prompt or topic is required.' };
+    }
+
+    // If an edit/append action is explicitly requested, or if the prompt mentions editing an existing document
+    const isEditIntent =
+      action === 'edit' ||
+      action === 'append' ||
+      action === 'update' ||
+      /\b(?:edit|update|modify|change|add\s+to|append\s+to)\b/i.test(prompt);
+
+    if (isEditIntent) {
+      const existing = findExistingWordDocument(docQuery || prompt);
+      if (existing || action === 'edit' || action === 'append' || action === 'update') {
+        logger.info(
+          `[SCRIBE] Routing to editDocument for "${existing ? existing.filename : docQuery || prompt}"`,
+        );
+        return await this.editDocument({
+          documentName: existing ? existing.filename : docQuery || requestedTitle,
+          instructions: args.edit_instructions || prompt,
+          ...args,
+        });
+      }
     }
 
     logger.info(`[SCRIBE] Generating [${format.toUpperCase()}] document for: "${prompt}"`);

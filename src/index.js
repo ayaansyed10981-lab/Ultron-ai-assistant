@@ -739,7 +739,7 @@ class JarvisDaemon {
           } else {
             // Instant verbal acknowledgment for code, document, inspection, or multi-agent tasks
             const isBuildTask =
-              /\b(?:build|make|create|code|write|program|engineer|draft|generate|check|audit|inspect|verify|test|design)\b.*\b(?:app|game|calculator|tracker|script|website|page|sql|schema|database|table|query|report|document|doc|pdf|code|video|image|visual|media|scrollytelling|banner|logo)\b/i.test(
+              /\b(?:build|make|create|code|write|program|engineer|draft|generate|check|audit|inspect|verify|test|design|edit|update|append|modify)\b.*\b(?:app|game|calculator|tracker|script|website|page|sql|schema|database|table|query|report|document|doc|pdf|code|video|image|visual|media|scrollytelling|banner|logo)\b/i.test(
                 transcript,
               );
             const isMultiAgentTask =
@@ -754,7 +754,9 @@ class JarvisDaemon {
                 : this.activeAgent === 'vision'
                   ? 'On it, sir. Engineering that in the background now. Feel free to speak to the rest of the team while I work.'
                   : this.activeAgent === 'friday'
-                    ? 'On it, sir. Preparing your document in the background now. The team remains listening.'
+                    ? (/\b(?:edit|update|append|modify)\b/i.test(transcript)
+                        ? 'On it, sir. Updating your document in the background now. The team remains listening.'
+                        : 'On it, sir. Preparing your document in the background now. The team remains listening.')
                     : this.activeAgent === 'jarvis'
                       ? 'On it, sir. Commencing quality assurance inspection in the background. Standing by.'
                       : this.activeAgent === 'veronica'
