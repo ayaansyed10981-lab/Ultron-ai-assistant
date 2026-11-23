@@ -387,6 +387,62 @@ export class VoiceProfileManager {
   }
 
   /**
+   * Whether a valid voice profile is loaded with enrolled acoustic templates
+   */
+  isEnrolled() {
+    return Boolean(this.profile && Object.keys(this.agents).length > 0);
+  }
+
+  /**
+   * Biometric speaker verification against the enrolled user profile.
+   * Returns:
+   *   { verified: boolean, distance: number, closestAgent: string, threshold: number, reason: string }
+   */
+  verifySpeaker(samples, thresholdOverride = null) {
+    if (!this.profile || Object.keys(this.agents).length === 0) {
+      // If no profile is enrolled, allow by default
+      return { verified: true, distance: 0, reason: 'un-enrolled', threshold: 0 };
+    }
+
+    if (!samples || samples.length < 1600) {
+      return { verified: false, distance: Infinity, reason: 'insufficient-samples', threshold: 0 };
+    }
+
+    const feats = extractVoiceFeatures(samples);
+    if (!feats || feats.length < 5) {
+      return { verified: false, distance: Infinity, reason: 'no-vocal-features', threshold: 0 };
+    }
+
+    let bestDist = Infinity;
+    let bestAgent = null;
+    let targetThresh = 0.18;
+
+    for (const [agentKey, agentData] of Object.entries(this.agents)) {
+      if (!Array.isArray(agentData.templates) || agentData.templates.length === 0) continue;
+      const agentThresh = agentData.threshold || 0.13;
+      for (const tmpl of agentData.templates) {
+        const d = dtwDistance(feats, tmpl);
+        if (d < bestDist) {
+          bestDist = d;
+          bestAgent = agentKey;
+          targetThresh = thresholdOverride || Math.max(0.18, agentThresh * 1.8);
+        }
+      }
+    }
+
+    const verified = bestDist <= targetThresh;
+    return {
+      verified,
+      distance: bestDist,
+      closestAgent: bestAgent,
+      threshold: targetThresh,
+      reason: verified
+        ? `verified-user[${bestAgent}](dist=${bestDist.toFixed(3)}<=${targetThresh.toFixed(3)})`
+        : `unverified-voice(dist=${bestDist.toFixed(3)}>${targetThresh.toFixed(3)})`,
+    };
+  }
+
+  /**
    * Check whether a spoken burst matches any enrolled agent's voice OR personalized Whisper spellings
    */
   matchUtterance(samples, transcript = '') {
@@ -401,6 +457,13 @@ export class VoiceProfileManager {
         for (const phrase of agentData.learnedPhrases) {
           if (!phrase || phrase.length < 3) continue;
           if (normText === phrase || normText.startsWith(`${phrase} `) || normText.includes(` ${phrase}`)) {
+            if (samples && samples.length >= 1600) {
+              const verify = this.verifySpeaker(samples, 0.25);
+              if (!verify.verified) {
+                logger.info(`[VOICE_PROFILE] Learned phrase "${phrase}" matched text but rejected unverified speaker (dist: ${verify.distance.toFixed(3)}).`);
+                continue;
+              }
+            }
             const idx = normText.indexOf(phrase);
             const trailing = normText.slice(idx + phrase.length).trim();
             return {

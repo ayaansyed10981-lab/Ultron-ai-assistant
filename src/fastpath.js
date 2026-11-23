@@ -2,12 +2,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { logger } from './logger.js';
 import { openHudWindow } from './hud_server.js';
+import { normalizeSpokenTranscript } from './audio.js';
+import { playSongDirectly } from './music.js';
 import {
   getSpokenTeamIntro,
   getVisionIntro,
   getFridayIntro,
   getJarvisIntro,
   getVeronicaIntro,
+  getEdithIntro,
   getUltronIntro,
 } from './agents/team_registry.js';
 
@@ -84,6 +87,8 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     .replace(/[.!?]+$/g, '')
     .trim();
 
+  text = normalizeSpokenTranscript(text);
+
   // If the user simply said the wake name (e.g. "Hey Vision", "Hey Friday", "Hey Jarvis", "Hey Ultron"), reply instantly (<2ms)
   if (!text) {
     const norm = String(activeAgent || 'ultron').toLowerCase();
@@ -98,6 +103,9 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     }
     if (norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video') {
       return 'Yes, sir? Veronica here. What visual assets, branding, or video loops shall I create?';
+    }
+    if (norm === 'edith' || norm === 'editor' || norm === 'cut' || norm === 'cutter') {
+      return 'Yes, sir? Edith here. What video, reel, document, or content shall I edit?';
     }
     return 'Ultron online, sir. How can I assist you?';
   }
@@ -132,6 +140,12 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     }
     return 'Veronica is on standby, sir.';
   }
+  if (/\b(?:what\s+is\s+edith\s+doing|is\s+edith\s+working|edith\s+status)\b/i.test(text)) {
+    if (controller && typeof controller.getActiveTasksSummary === 'function') {
+      return controller.getActiveTasksSummary('edith');
+    }
+    return 'Edith is on standby, sir.';
+  }
   if (/\b(?:what\s+is\s+(?:the\s+)?team\s+doing|what\s+are\s+(?:the\s+)?agents\s+doing|team\s+status|status\s+of\s+agents|status\s+of\s+(?:the\s+)?team|what\s+are\s+you\s+all\s+doing|who\s+is\s+working)\b/i.test(text)) {
     if (controller && typeof controller.getActiveTasksSummary === 'function') {
       return controller.getActiveTasksSummary();
@@ -152,6 +166,9 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:veronica|media|creative|visuals?)$/i.test(text) || text === 'veronica') {
     return { switchAgent: 'veronica', text: 'Switching to Veronica, sir. Veronica standing by for visual media.' };
   }
+  if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:edith|editor|cutter)$/i.test(text) || text === 'edith' || text === 'editor') {
+    return { switchAgent: 'edith', text: 'Switching to Edith, sir. Edith standing by for media and content editing.' };
+  }
   if (/^(?:switch\s+to|talk\s+to|speak\s+to|connect\s+me\s+to|call)\s+(?:ultron|altron)$/i.test(text) || text === 'ultron') {
     return { switchAgent: 'ultron', text: 'Ultron standing by, sir.' };
   }
@@ -168,6 +185,9 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   }
   if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:video|image|visual|creative|media)\s+agent|who\s+is\s+(?:the\s+)?(?:video|image|visual|creative|media|veronica)\s+agent|who\s+(?:creates|makes|generates)\s+(?:the\s+)?(?:videos?|images?|visuals?|media)|visual\s+agent)\b/i.test(text)) {
     return 'Veronica is our Chief Visual Media & Generative Creative Director, sir. She creates cinematic video loops, imagery, branding, and scrollytelling visual assets. You can talk to her directly by saying "Hey Veronica".';
+  }
+  if (/\b(?:(?:who|what)\s+(?:is\s+)?(?:the\s+)?name\s+of\s+(?:the\s+)?(?:editing|editor|trimming|cutter|video\s+editor)\s+agent|who\s+is\s+(?:the\s+)?(?:editor|edith|cutter)\s+agent|who\s+(?:edits|trims|cuts)\s+(?:the\s+)?(?:videos?|content|reels?|docs?|documents?)|editing\s+agent)\b/i.test(text)) {
+    return 'Edith is our Chief Media & Content Editor, sir. She edits and trims videos, cuts reels and shorts, extracts audio, and polishes documents and content. You can talk to her directly anytime by saying "Hey Edith".';
   }
 
   // 0.2 Instant Polite Conversational Replies (< 2ms)
@@ -195,6 +215,11 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   if (/^(how are you|how are you doing|how'?s it going|you good)$/.test(text)) {
     return 'Operating at peak efficiency, sir. Let me know what you need.';
   }
+  if (
+    /^(?:(?:are\s+you\s+)?listening|(?:can\s+you\s+)?hear\s+me|are\s+you\s+there|hello\s+are\s+you\s+there|you\s+there|(?:why\s+)?(?:are\s+you|he\s+is|is\s+he)\s+not\s+responding(?:\s+to\s+me)?|not\s+responding|are\s+you\s+online)$/i.test(text)
+  ) {
+    return 'I am right here and listening to you, sir. How can I assist you?';
+  }
   if (/\b(?:who\s+(?:is\s+)?in\s+your\s+team|is\s+in\s+your\s+team|in\s+your\s+team|your\s+team|about\s+your\s+team|who\s+are\s+your\s+agents|tell\s+me\s+about\s+your\s+team|introduce\s+your\s+team|meet\s+your\s+team|what\s+is\s+your\s+team|your\s+agents)\b/i.test(text)) {
     return getSpokenTeamIntro();
   }
@@ -211,6 +236,8 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     if (norm === 'vision' || norm === 'coder' || norm === 'cypher') return getVisionIntro();
     if (norm === 'friday' || norm === 'writer' || norm === 'scribe' || norm === 'doc') return getFridayIntro();
     if (norm === 'jarvis' || norm === 'inspector' || norm === 'qa') return getJarvisIntro();
+    if (norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video') return getVeronicaIntro();
+    if (norm === 'edith' || norm === 'editor' || norm === 'cut' || norm === 'cutter') return getEdithIntro();
     return getUltronIntro();
   }
 
@@ -324,38 +351,44 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     }
   }
 
-  // 0.37 Direct Song & Music Playback ("play this song Believer", "play Starboy", "play Bohemian Rhapsody on Spotify")
-  const songMatch = text.match(
-    /^(?:play\s+(?:this\s+|the\s+)?song(?:\s+(?:called|named))?|play\s+music(?:\s+by)?|play\s+track|play)\s+(.+)$/i,
+  // 0.37 Direct Song & Music Playback ("play this song Believer", "play Ashke by Karan Aujla", "pay ashke", "put on Starboy")
+  let songMatch = text.match(
+    /^(?:play|pay|plea|ply|stream|put\s+on|listen\s+to|start)(?:\s+(?:this|the))?(?:\s+(?:song|track|music))?(?:\s+(?:called|named|by))?\s+(.+)$/i,
   );
+  if (
+    !songMatch &&
+    /\bby\s+(?:karan\s+aujla|sidhu\s+moose|diljit\s+dosanjh|ap\s+dhillon|arijit\s+singh|shubh|badshah)\b/i.test(
+      text,
+    )
+  ) {
+    songMatch = [text, text];
+  }
   if (songMatch) {
     const rawQuery = songMatch[1].trim();
     const isSimpleMediaControl =
       /^(?:pause|play|music|media|video|song|track|sound|audio|next|previous)$/i.test(rawQuery);
 
     if (!isSimpleMediaControl) {
-      let songClean = rawQuery;
+      let songClean = normalizeSpokenTranscript(rawQuery);
       let platform = 'youtube';
 
-      if (/\s+on\s+spotify$/i.test(songClean)) {
+      if (/\s+on\s+spotify$/i.test(songClean) || /^on\s+spotify\s+/i.test(songClean)) {
         platform = 'spotify';
-        songClean = songClean.replace(/\s+on\s+spotify$/i, '').trim();
-      } else if (/\s+on\s+(?:youtube|yt)$/i.test(songClean)) {
+        songClean = songClean
+          .replace(/^on\s+spotify\s+/i, '')
+          .replace(/\s+on\s+spotify$/i, '')
+          .trim();
+      } else if (/\s+on\s+(?:youtube|yt)$/i.test(songClean) || /^on\s+(?:youtube|yt)\s+/i.test(songClean)) {
         platform = 'youtube';
-        songClean = songClean.replace(/\s+on\s+(?:youtube|yt)$/i, '').trim();
+        songClean = songClean
+          .replace(/^on\s+(?:youtube|yt)\s+/i, '')
+          .replace(/\s+on\s+(?:youtube|yt)$/i, '')
+          .trim();
       }
 
-      logger.info(`[FAST] Playing song directly: "${songClean}" on ${platform}`);
-
-      if (platform === 'spotify') {
-        const spotifyUrl = `https://open.spotify.com/search/${encodeURIComponent(songClean)}`;
-        await controller.executeTool('open_url', { url: spotifyUrl });
-        return `Playing ${songClean} on Spotify for you, sir.`;
-      } else {
-        const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(songClean)}`;
-        await controller.executeTool('open_url', { url: ytUrl });
-        return `Playing ${songClean} for you, sir.`;
-      }
+      logger.info(`[FAST] Direct song playback requested: "${songClean}" on ${platform}`);
+      const playRes = await playSongDirectly(songClean, controller, platform);
+      return playRes.reply || `Playing ${songClean} directly for you, sir.`;
     }
   }
 
@@ -474,7 +507,52 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     }
   }
 
-  // 2. Volume & Media Controls
+  // 2. Compound Video & Playback Controls (<3ms)
+  // E.g., "full screen this and resume this video", "fullscreen and play", "resume this video and fullscreen"
+  const isFullscreenAction =
+    /\b(?:fullscreen|full\s+screen)\b/i.test(text) &&
+    !/\b(?:exit|leave|close|escape|un|stop|quit)\s*(?:fullscreen|full\s+screen)\b/i.test(text);
+  const isExitFullscreenAction =
+    /\b(?:exit|leave|close|escape|un|stop|quit)\s*(?:fullscreen|full\s+screen)\b/i.test(text) ||
+    /\b(?:minimize|restore)\s+(?:from\s+)?(?:fullscreen|full\s+screen)\b/i.test(text);
+  const isPlayResumeAction =
+    /\b(?:resume|unpause|play|continue)\b/i.test(text) &&
+    !/\b(?:pause|stop)\b/i.test(text);
+  const isPauseAction =
+    /\b(?:pause|stop)\b/i.test(text) &&
+    !/\b(?:resume|unpause|play|continue)\b/i.test(text);
+
+  if (
+    isFullscreenAction &&
+    (isPlayResumeAction || isPauseAction) &&
+    text.split(/\s+/).length <= 12 &&
+    !/\b(?:search|find|google|look\s+up|create|write|code|document)\b/i.test(text)
+  ) {
+    logger.info(`[FAST] Compound video action: Fullscreen + ${isPlayResumeAction ? 'Play/Resume' : 'Pause'} ("${text}")`);
+    await controller.executeTool('control_media_volume', { command: 'fullscreen' });
+    await new Promise((r) => setTimeout(r, 60));
+    await controller.executeTool('control_media_volume', { command: 'play_pause' });
+    return isPlayResumeAction
+      ? 'Fullscreen toggled and video resumed, sir.'
+      : 'Fullscreen toggled and video paused, sir.';
+  }
+
+  if (
+    isExitFullscreenAction &&
+    (isPlayResumeAction || isPauseAction) &&
+    text.split(/\s+/).length <= 12 &&
+    !/\b(?:search|find|google|look\s+up|create|write|code|document)\b/i.test(text)
+  ) {
+    logger.info(`[FAST] Compound video action: Exit Fullscreen + ${isPlayResumeAction ? 'Play/Resume' : 'Pause'} ("${text}")`);
+    await controller.executeTool('control_media_volume', { command: 'exit_fullscreen' });
+    await new Promise((r) => setTimeout(r, 60));
+    await controller.executeTool('control_media_volume', { command: 'play_pause' });
+    return isPlayResumeAction
+      ? 'Exited fullscreen and video resumed, sir.'
+      : 'Exited fullscreen and video paused, sir.';
+  }
+
+  // 2b. Volume & Single Media Controls
   if (/^(volume up|turn (up|the volume up)|increase( the)? volume|louder)$/.test(text)) {
     await controller.executeTool('control_media_volume', { command: 'volume_up', steps: 5 });
     return 'Volume up, sir.';
@@ -487,7 +565,10 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     await controller.executeTool('control_media_volume', { command: 'mute' });
     return 'Toggled mute, sir.';
   }
-  if (/^(pause|play|play pause|pause( the)? (music|video|media)|resume( the)? (music|video|media))$/.test(text)) {
+  if (
+    /^(?:pause|play|play\s+pause|unpause|resume|continue)(?:\s+(?:the|this|that|my))?(?:\s+(?:music|video|media|playback|song|track|stream|movie))?$/i.test(text) ||
+    /^(?:toggle\s+)?(?:play\s+pause|playback)$/i.test(text)
+  ) {
     await controller.executeTool('control_media_volume', { command: 'play_pause' });
     return 'Done, sir.';
   }
@@ -498,6 +579,58 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   if (/^(previous( track| song)?|last song|go back( a)? song)$/.test(text)) {
     await controller.executeTool('control_media_volume', { command: 'prev_track' });
     return 'Previous track, sir.';
+  }
+
+  // 2a. Instant Video & Browser Fullscreen Controls ("fullscreen this video", "fullscreen", "full screen", "exit fullscreen")
+  if (
+    /^(?:fullscreen|full\s+screen)(?:\s+(?:this|the|that))?(?:\s+(?:video|window|screen|movie|clip|stream|tab|player))?$/i.test(text) ||
+    /^(?:make|toggle|go|set|put)(?:\s+(?:this|the|it|that))?(?:\s+(?:video|window|screen|player))?(?:\s+(?:in|into|to))?\s+(?:fullscreen|full\s+screen)$/i.test(text) ||
+    /^(?:video\s+)?(?:fullscreen|full\s+screen)$/i.test(text)
+  ) {
+    logger.info('[FAST] Toggling video fullscreen');
+    await controller.executeTool('control_media_volume', { command: 'fullscreen' });
+    return 'Fullscreen toggled, sir.';
+  }
+  if (
+    /^(?:exit|leave|close|escape|un|stop|quit)\s*(?:fullscreen|full\s+screen)$/i.test(text) ||
+    /^(?:minimize|restore)\s+(?:from\s+)?(?:fullscreen|full\s+screen)$/i.test(text)
+  ) {
+    logger.info('[FAST] Exiting fullscreen');
+    await controller.executeTool('control_media_volume', { command: 'exit_fullscreen' });
+    return 'Exited fullscreen, sir.';
+  }
+  if (/^(?:theater|theatre)\s+mode$/i.test(text)) {
+    logger.info('[FAST] Toggling theater mode');
+    await controller.executeTool('control_media_volume', { command: 'theater_mode' });
+    return 'Theater mode toggled, sir.';
+  }
+  if (/^(?:browser\s+fullscreen|fullscreen\s+browser|f11)$/i.test(text)) {
+    logger.info('[FAST] Toggling browser fullscreen');
+    await controller.executeTool('control_media_volume', { command: 'fullscreen_browser' });
+    return 'Browser fullscreen toggled, sir.';
+  }
+
+  // 2b. Reels Mode / Media Noise Guard ("reels mode on", "watching reels", "ignore background reels", "reels mode off")
+  if (
+    /^(?:reels?|media)\s+mode(?:\s+(?:on|active|start|enable))?$/i.test(text) ||
+    /^(?:(?:i'?m|i\s+am)\s+)?(?:watching|viewing|seeing|playing|scrolling)\s+reels?$/i.test(text) ||
+    /^(?:reels?\s+mode)$/i.test(text) ||
+    /^(?:ignore\s+reels?|ignore\s+background\s+(?:voices?|media|reels?))$/i.test(text)
+  ) {
+    if (typeof controller.setReelMode === 'function') {
+      controller.setReelMode(true, 60);
+    }
+    return 'Reels mode activated, sir. I will strictly ignore background voices, phone audio, and media while you watch reels.';
+  }
+  if (
+    /^(?:reels?|media)\s+mode\s+(?:off|disable|stop)$/i.test(text) ||
+    /^(?:exit|disable|stop|turn off)\s+(?:reels?|media)\s+mode$/i.test(text) ||
+    /^(?:normal|standard)\s+mode$/i.test(text)
+  ) {
+    if (typeof controller.setReelMode === 'function') {
+      controller.setReelMode(false);
+    }
+    return 'Reels mode deactivated, sir. Standard wake detection restored.';
   }
 
   // 3. Window / Desktop / Lock controls
@@ -511,12 +644,19 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   }
 
   // 4. Explicit Web Searches (ONLY when user explicitly asks to open browser/YouTube)
-  const ytMatch = text.match(/^(?:open youtube and search (?:for )?|play on youtube)\s+(.+)$/);
-  if (ytMatch) {
-    const q = ytMatch[1].trim();
+  const ytPlayMatch = text.match(/^(?:play on youtube|watch on youtube)\s+(.+)$/i);
+  if (ytPlayMatch) {
+    const q = ytPlayMatch[1].trim();
+    const playRes = await playSongDirectly(q, controller, 'youtube');
+    return playRes.reply || `Playing ${q} directly on YouTube, sir.`;
+  }
+
+  const ytSearchMatch = text.match(/^(?:open youtube and search (?:for )?|search on youtube (?:for )?)\s+(.+)$/i);
+  if (ytSearchMatch) {
+    const q = ytSearchMatch[1].trim();
     const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
     await controller.executeTool('open_url', { url });
-    return `Opening YouTube for ${q}, sir.`;
+    return `Opening YouTube search for ${q}, sir.`;
   }
 
   const browserSearchMatch = text.match(/^(?:open (?:the )?browser and search (?:for )?|open google and search (?:for )?)\s+(.+)$/);

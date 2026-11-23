@@ -2,6 +2,7 @@ import { CypherAgent } from './cypher.js';
 import { ScribeAgent } from './scribe.js';
 import { JarvisAgent } from './jarvis.js';
 import { VeronicaAgent } from './veronica.js';
+import { EdithAgent } from './edith.js';
 import { ULTRON_TEAM, getSpokenTeamIntro } from './team_registry.js';
 import { logger } from '../logger.js';
 
@@ -12,7 +13,8 @@ import { logger } from '../logger.js';
  *   - Friday: Executive Document Architect (Word & PDF)
  *   - Jarvis: Chief Quality Assurance Engineer & System Inspector
  *   - Veronica: Chief Visual Media & Generative Creative Director
- *   - Ultron: Supreme Commander, orchestrating all four in parallel
+ *   - Edith: Chief Media & Content Editor (Video Trimming, Document & Content Editing)
+ *   - Ultron: Supreme Commander, orchestrating all operatives in parallel
  */
 export class TeamOrchestrator {
   constructor(geminiEngine) {
@@ -23,6 +25,8 @@ export class TeamOrchestrator {
     this.scribe = this.friday; // alias
     this.jarvis = new JarvisAgent(geminiEngine);
     this.veronica = new VeronicaAgent(geminiEngine);
+    this.edith = new EdithAgent(geminiEngine);
+    this.editor = this.edith; // alias
   }
 
   getTeamRoster() {

@@ -20,6 +20,7 @@ import {
 } from './word_docs.js';
 import { TeamOrchestrator } from './agents/orchestrator.js';
 import { logger } from './logger.js';
+import { playSongDirectly } from './music.js';
 
 const NOTES_FILE = path.join(os.homedir(), 'UltronNotes', 'notes.md');
 
@@ -83,6 +84,10 @@ export class ComputerController {
     this.orchestrator = new TeamOrchestrator(engine);
   }
 
+  setOrchestrator(orch) {
+    this.orchestrator = orch;
+  }
+
   setHudServer(hudServer) {
     this.hudServer = hudServer;
   }
@@ -93,6 +98,16 @@ export class ComputerController {
 
   setCallModeHandler(fn) {
     this.callModeHandler = fn;
+  }
+
+  setReelModeHandler(fn) {
+    this.reelModeHandler = fn;
+  }
+
+  setReelMode(enabled, durationMins = 60) {
+    if (typeof this.reelModeHandler === 'function') {
+      return this.reelModeHandler(enabled, durationMins);
+    }
   }
 
   async checkCallStatus() {
@@ -239,6 +254,28 @@ export class ComputerController {
       },
       {
         type: 'function',
+        name: 'play_music',
+        description:
+          'Directly play a song, track, or artist on YouTube or Spotify. Directly resolves and opens the video player with autoplay enabled instead of showing search results.',
+        parameters: {
+          type: 'object',
+          properties: {
+            song: {
+              type: 'string',
+              description:
+                'The title of the song, track, or artist to play (e.g. "Ashke by Karan Aujla", "Believer", "Starboy").',
+            },
+            platform: {
+              type: 'string',
+              enum: ['youtube', 'spotify'],
+              description: 'The streaming platform to use. Defaults to "youtube".',
+            },
+          },
+          required: ['song'],
+        },
+      },
+      {
+        type: 'function',
         name: 'control_media_volume',
         description: 'Control Windows system audio volume or media playback.',
         parameters: {
@@ -254,6 +291,11 @@ export class ComputerController {
                 'next_track',
                 'prev_track',
                 'stop_media',
+                'fullscreen',
+                'fullscreen_video',
+                'fullscreen_browser',
+                'exit_fullscreen',
+                'theater_mode',
               ],
               description: 'The volume or media action to perform.',
             },
@@ -734,6 +776,43 @@ export class ComputerController {
       },
       {
         type: 'function',
+        name: 'delegate_to_edith',
+        description:
+          'Delegate video editing, clip trimming, reel cutting, audio extraction, Microsoft Word document polishing, or content refinement to Agent Edith (Chief Media & Content Editor).',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['edit_video', 'trim_video', 'extract_audio', 'edit_document', 'edit_content'],
+              description: 'Editing action to perform.',
+            },
+            target: {
+              type: 'string',
+              description: 'Target video file, document name, or text content to edit.',
+            },
+            instructions: {
+              type: 'string',
+              description: 'Exact edit instructions, trimming parameters, or tone requirements.',
+            },
+            start_time: {
+              type: 'string',
+              description: 'Start timestamp for video/audio trimming (e.g., "00:00:15").',
+            },
+            end_time: {
+              type: 'string',
+              description: 'End timestamp for video/audio trimming (e.g., "00:01:30").',
+            },
+            style: {
+              type: 'string',
+              description: 'Tone or style target (e.g. executive, punchy, cinematic, concise).',
+            },
+          },
+          required: ['action', 'instructions'],
+        },
+      },
+      {
+        type: 'function',
         name: 'make_phone_call',
         description:
           'Place a phone call to the user or a phone number. Use when the user asks to call them, call their phone, dial a number, or ring their mobile.',
@@ -841,6 +920,13 @@ export class ComputerController {
         case 'open_url': {
           const data = await this._callNative('open_url', args);
           return { text: JSON.stringify({ ok: true, ...data }) };
+        }
+
+        case 'play_music': {
+          const song = args.song || args.query || args.name || '';
+          const platform = args.platform || 'youtube';
+          const res = await playSongDirectly(song, this, platform);
+          return { text: JSON.stringify({ ok: true, ...res }) };
         }
 
         case 'control_media_volume': {
@@ -1150,6 +1236,22 @@ export class ComputerController {
             res = await this.orchestrator.veronica.generateImage(args);
           } else {
             res = await this.orchestrator.veronica.generateMediaKit(args);
+          }
+          return { text: JSON.stringify(res) };
+        }
+
+        case 'delegate_to_edith': {
+          if (!this.orchestrator || !this.orchestrator.edith) {
+            return { text: JSON.stringify({ ok: false, error: 'Agent Edith not initialized.' }) };
+          }
+          const action = String(args.action || 'edit_video').toLowerCase();
+          let res;
+          if (action === 'edit_document') {
+            res = await this.orchestrator.edith.editDocument(args);
+          } else if (action === 'edit_content') {
+            res = await this.orchestrator.edith.editContent(args);
+          } else {
+            res = await this.orchestrator.edith.editVideo(args);
           }
           return { text: JSON.stringify(res) };
         }

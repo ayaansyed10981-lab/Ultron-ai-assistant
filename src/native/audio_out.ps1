@@ -112,6 +112,7 @@ $cachedVisionBytes = Get-CachedWakeBytes "vision" "Yes, sir? Vision here. What a
 $cachedFridayBytes = Get-CachedWakeBytes "friday" "Yes, sir? Friday here. Which document or report shall I create?" "Zira"
 $cachedJarvisBytes = Get-CachedWakeBytes "jarvis" "Jarvis at your service, sir. What code, query, or document shall I inspect?" "David"
 $cachedVeronicaBytes = Get-CachedWakeBytes "veronica" "Veronica here, sir. What visual assets, branding, or video loops shall I create?" "Zira"
+$cachedEdithBytes = Get-CachedWakeBytes "edith" "Edith online, sir. What video, media, or content shall I edit?" "Zira"
 
 function Build-ToneWav([double[]]$freqs, [int]$noteMs = 55, [double]$volume = 0.16) {
     $sampleRate = 24000
@@ -191,6 +192,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                 $streamBytes = $cachedJarvisBytes
             } elseif ($agent -like "*veronica*" -and $null -ne $cachedVeronicaBytes) {
                 $streamBytes = $cachedVeronicaBytes
+            } elseif ($agent -like "*edith*" -and $null -ne $cachedEdithBytes) {
+                $streamBytes = $cachedEdithBytes
             } elseif ($null -ne $cachedUltronBytes) {
                 $streamBytes = $cachedUltronBytes
             }
@@ -227,7 +230,9 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
             Start-Sleep -Milliseconds 200
             Speak-WinRT "Veronica reporting, sir: generative visual media, cinematic video direction, and creative design online." "Zira"
             Start-Sleep -Milliseconds 200
-            Speak-WinRT "All five operatives assembled and standing by for your command, sir. What is our objective?" "Mark"
+            Speak-WinRT "Edith reporting, sir: precision media editing, video trimming, and content refinement standing by." "Zira"
+            Start-Sleep -Milliseconds 200
+            Speak-WinRT "All six operatives assembled and standing by for your command, sir. What is our objective?" "Mark"
             Emit-Json @{ id = $id; ok = $true }
         } elseif ($action -eq "chime") {
             $kind = $req.kind

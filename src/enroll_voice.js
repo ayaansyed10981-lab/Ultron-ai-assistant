@@ -61,6 +61,16 @@ const AGENT_CONFIGS = {
     completePrompt: 'Veronica voice profile calibrated and standing by for visual direction, sir.',
     defaultSamples: 4,
   },
+  edith: {
+    key: 'edith',
+    name: 'Edith',
+    title: 'Chief Media & Content Editor',
+    wakeWord: 'Hey Edith',
+    voice: 'Zira',
+    startPrompt: 'Edith media and content editing calibration ready, sir. Please say Hey Edith clearly {N} times when prompted.',
+    completePrompt: 'Edith voice profile calibrated and standing by for editing direction, sir.',
+    defaultSamples: 4,
+  },
 };
 
 function parseArgs() {

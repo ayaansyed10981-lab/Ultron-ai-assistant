@@ -18,6 +18,45 @@ const STT_MODEL_DIR = path.join(ROOT_DIR, 'models', 'sherpa-onnx-moonshine-tiny-
 
 const PS_EXE = 'powershell.exe';
 const SAMPLE_RATE = 16000;
+const WAKE_DEBOUNCE_MS = 2500;
+
+/**
+ * Intelligent phonetic speech normalizer:
+ * Fixes common speech recognition mishearings (e.g. "or skate" -> "ashke", "pay" -> "play",
+ * Indian artist names, regional song titles, and wake-words).
+ */
+export function normalizeSpokenTranscript(raw) {
+  if (!raw) return '';
+  let s = String(raw).trim();
+
+  // 1. "pay [song]" / "plea [song]" -> "play [song]"
+  s = s.replace(/^(?:pay|lay|plea|ply|playe)\s+(?:the\s+|this\s+)?(?:song|track|music)?\s*/i, 'play ');
+  s = s.replace(/^(?:pay|plea|ply)\s+/i, 'play ');
+
+  // 2. Phonetic corrections for "Ashke" (Punjabi hit song by Karan Aujla)
+  // Whisper English-only model maps "Ashke" phonemes to "or skate", "a skate", "our skate", "ash k"
+  s = s.replace(/\b(?:or\s+skate|a\s+skate|our\s+skate|as\s+skate|are\s+skate|ash\s*k\b|ash\s*kay\b|ashka\b|ashki\b)/gi, 'ashke');
+
+  // 3. Indian artists & music producers phonetics
+  s = s.replace(/\b(?:karan\s+ojla|karan\s+ojhla|karan\s+ujla|current\s+aujla|karan\s+ogla|car\s+and\s+aujla|karan\s+audhla)\b/gi, 'karan aujla');
+  s = s.replace(/\b(?:sidhu\s+moose\s*wala|sidhu\s+muse\s*wala|moosewala)\b/gi, 'sidhu moose wala');
+  s = s.replace(/\b(?:diljit\s+dosanj|diljeet\s+dosanjh?)\b/gi, 'diljit dosanjh');
+  s = s.replace(/\b(?:ap\s+dhillon|a\s+p\s+dhillon|ab\s+dhillon)\b/gi, 'ap dhillon');
+  s = s.replace(/\b(?:arijit\s+sing|arijit\s+singh)\b/gi, 'arijit singh');
+  s = s.replace(/\b(?:honey\s+sing|honey\s+singh|yo\s+yo\s+honey)\b/gi, 'honey singh');
+  s = s.replace(/\b(?:shubh|shubh\s+music)\b/gi, 'shubh');
+  s = s.replace(/\b(?:badshah|badsha)\b/gi, 'badshah');
+
+  // 4. Operative wake-word phonetics
+  s = s.replace(/\b(?:all\s*tron|altron|eltron|oltron|ultra\s*on)\b/gi, 'ultron');
+  s = s.replace(/\b(?:vizion|vishon|vison|vishan|vyram)\b/gi, 'vision');
+  s = s.replace(/\b(?:fryday|fry\s*day)\b/gi, 'friday');
+  s = s.replace(/\b(?:charvis|jarviz|jarviss)\b/gi, 'jarvis');
+  s = s.replace(/\b(?:varonica|veronika)\b/gi, 'veronica');
+  s = s.replace(/\b(?:e\s*dith|ee\s*dith|edath|edit\s*h|a\s*dith)\b/gi, 'edith');
+
+  return s;
+}
 
 function spawnPowerShell(scriptName, extraArgs = []) {
   const scriptPath = path.join(NATIVE_DIR, scriptName);
@@ -127,6 +166,12 @@ function buildKeywordsFile(wakeWords) {
   // Agent Veronica (Visual Media & Video Specialist)
   safeAdd(`${BPE}HE Y ${BPE}VER ON IC A @Hey_Veronica`);
   safeAdd(`${BPE}OKAY ${BPE}VER ON IC A @Okay_Veronica`);
+
+  // Agent Edith (Media & Content Editing Specialist)
+  safeAdd(`${BPE}HE Y ${BPE}E DI TH @Hey_Edith`);
+  safeAdd(`${BPE}OKAY ${BPE}E DI TH @Okay_Edith`);
+  safeAdd(`${BPE}HE Y ${BPE}E D I TH @Hey_Edith`);
+  safeAdd(`${BPE}OKAY ${BPE}E D I TH @Okay_Edith`);
 
   // Instant Interruption & Barge-in Keywords (Immediate speech cutoff when user says Stop, Wait, Cancel, Listen)
   safeAdd(`${BPE}ST O P @Stop`);
@@ -294,6 +339,9 @@ export class AudioOutputWorker {
     if (norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video') {
       return { windowsVoice: 'Zira', geminiVoice: 'Kore' }; // Veronica: Generative visual media director
     }
+    if (norm === 'edith' || norm === 'editor' || norm === 'edit' || norm === 'cutter') {
+      return { windowsVoice: 'Zira', geminiVoice: 'Aoede' }; // Edith: Chief Media & Content Editor
+    }
     return {
       windowsVoice: this.config.windowsTtsVoice || 'Mark',
       geminiVoice: this.config.geminiTtsVoice || 'Fenrir',
@@ -325,7 +373,9 @@ export class AudioOutputWorker {
             ? 'jarvis'
             : norm === 'veronica' || norm === 'media' || norm === 'creative' || norm === 'video'
               ? 'veronica'
-              : 'ultron';
+              : norm === 'edith' || norm === 'editor' || norm === 'edit' || norm === 'cutter'
+                ? 'edith'
+                : 'ultron';
     await this._send({ action: 'wake_reply', agent: targetAgent });
   }
 
@@ -388,9 +438,42 @@ export class WakeWordListener extends EventEmitter {
     this.bargeIn = false;
     this.bargeInVoiceFrames = 0;
 
-    // Standby pre-roll + speech-burst buffer for Whisper + Personal Voice Fingerprint wake spotting
+    // Rolling buffer of recent audio (~1000ms) for speaker verification of KWS triggers
+    this.rollingWindowChunks = [];
     this.preRollChunks = [];
     this.standbyBurst = null;
+
+    // Acoustic Media Guard & Reels Protection
+    this.reelModeActive = false;
+    this._reelModeTimer = null;
+    this.isSpeakerPlaying = false;
+    this.lastSpeakerPlayingAt = 0;
+    this.lastRejectedWakeAt = 0;
+  }
+
+  setReelMode(enabled, durationMs = 60 * 60 * 1000) {
+    this.reelModeActive = Boolean(enabled);
+    if (this._reelModeTimer) {
+      clearTimeout(this._reelModeTimer);
+      this._reelModeTimer = null;
+    }
+    if (this.reelModeActive && durationMs > 0) {
+      this._reelModeTimer = setTimeout(() => {
+        this.reelModeActive = false;
+        logger.info('[REEL GUARD] Reels mode timer expired. Normal listening sensitivity restored.');
+      }, durationMs);
+    }
+    logger.info(
+      `[REEL GUARD] Reels mode is now ${this.reelModeActive ? 'ACTIVE (Strict biometric filter enabled)' : 'INACTIVE (Standard mode)'}.`,
+    );
+  }
+
+  isMediaPlaying() {
+    return Boolean(
+      this.isSpeakerPlaying ||
+      (Date.now() - this.lastSpeakerPlayingAt < 2500) ||
+      this.reelModeActive,
+    );
   }
 
   setBargeIn(active) {
@@ -409,6 +492,31 @@ export class WakeWordListener extends EventEmitter {
   _initKws() {
     if (this.kws) return;
     const kwFile = buildKeywordsFile(this.config.wakeWords);
+    const confidence = String(this.config.wakeConfidence || 'high').trim().toLowerCase();
+
+    let keywordsScore = 2.0;
+    let keywordsThreshold = 0.26;
+
+    if (confidence === 'high' || confidence === 'reels' || confidence === 'media') {
+      keywordsScore = 1.8;
+      keywordsThreshold = 0.30;
+    } else if (confidence === 'low') {
+      keywordsScore = 2.4;
+      keywordsThreshold = 0.16;
+    } else {
+      keywordsScore = 2.0;
+      keywordsThreshold = 0.25;
+    }
+
+    if (this.reelModeActive) {
+      keywordsScore = 1.6;
+      keywordsThreshold = 0.35;
+    }
+
+    logger.info(
+      `[KWS] Initializing Sherpa-ONNX KeywordSpotter (Score: ${keywordsScore}, Threshold: ${keywordsThreshold}, Confidence: ${confidence})`,
+    );
+
     this.kws = new sherpa.KeywordSpotter({
       featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
       modelConfig: {
@@ -422,8 +530,8 @@ export class WakeWordListener extends EventEmitter {
         provider: 'cpu',
       },
       keywordsFile: kwFile,
-      keywordsScore: 2.5,
-      keywordsThreshold: 0.14,
+      keywordsScore,
+      keywordsThreshold,
     });
     this.kwsStream = this.kws.createStream();
   }
@@ -451,6 +559,14 @@ export class WakeWordListener extends EventEmitter {
         .map((s) => s.trim())
         .filter(Boolean);
       for (const line of lines) {
+        if (line.startsWith('SPEAKER_PLAYING:')) {
+          const isPlaying = line.endsWith(':1');
+          this.isSpeakerPlaying = isPlaying;
+          if (isPlaying) {
+            this.lastSpeakerPlayingAt = Date.now();
+          }
+          continue;
+        }
         if (line === 'STREAM_READY') {
           this.restartAttempts = 0;
           this.emit('ready', { words: this.config.wakeWords, engine: 'sherpa-onnx-arm64' });
@@ -552,15 +668,11 @@ export class WakeWordListener extends EventEmitter {
     }
     const standRms = Math.sqrt(standSq / sampleCount);
 
-    // Update ambient room noise floor ONLY during quiet frames so speech never inflates threshold!
-    if (standRms < 320) {
-      this.ambientRms = this.ambientRms * 0.92 + standRms * 0.08;
+    // Maintain rolling buffer of the last ~1100ms for instant biometric speaker verification
+    this.rollingWindowChunks.push(Buffer.from(buf));
+    if (this.rollingWindowChunks.length > 14) {
+      this.rollingWindowChunks.shift();
     }
-
-    const standbyVadThreshold = Math.min(
-      450,
-      Math.max(130, Math.round(this.ambientRms * 2.0 + 90)),
-    );
 
     // Maintain a ~320ms pre-roll ring buffer so the start of "Hey Jarvis" is never clipped
     this.preRollChunks.push(Buffer.from(buf));
@@ -568,11 +680,26 @@ export class WakeWordListener extends EventEmitter {
       this.preRollChunks.shift();
     }
 
+    // Update ambient room noise floor ONLY during quiet frames and when PC speakers are NOT playing!
+    const mediaActive = this.isMediaPlaying();
+    if (standRms < 320 && !mediaActive) {
+      this.ambientRms = this.ambientRms * 0.92 + standRms * 0.08;
+    }
+
+    const baseVad = mediaActive || this.reelModeActive ? 320 : 130;
+    const standbyVadThreshold = Math.min(
+      480,
+      Math.max(baseVad, Math.round(this.ambientRms * 2.0 + (mediaActive ? 140 : 90))),
+    );
+
     // Engine A: Streaming Zipformer KWS (instant sub-150ms trigger)
     const kwsSamples = new Float32Array(rawSamples);
     const rmsNorm = standRms / 32768.0;
-    if (rmsNorm > 0.0012) {
-      const gain = Math.min(12.0, 0.22 / rmsNorm);
+    // Dynamic gain boost for distance pickup:
+    // Limit boost to 2.5x max (or 1.0x in reel mode) so background media, TV, and phone reels are never over-amplified
+    const maxGain = this.reelModeActive ? 1.0 : mediaActive ? 1.4 : 2.5;
+    if (rmsNorm > 0.002) {
+      const gain = Math.min(maxGain, 0.14 / rmsNorm);
       if (gain > 1.05) {
         for (let i = 0; i < sampleCount; i++) {
           const boosted = kwsSamples[i] * gain;
@@ -589,7 +716,7 @@ export class WakeWordListener extends EventEmitter {
       if (res && res.keyword && res.keyword.trim() !== '') {
         this.kws.reset(this.kwsStream);
         const now = Date.now();
-        if (now - this.lastWakeAt > 800) {
+        if (now - this.lastWakeAt > WAKE_DEBOUNCE_MS) {
           this.lastWakeAt = now;
           let targetAgent = 'ultron';
           const kwLower = res.keyword.toLowerCase();
@@ -597,6 +724,7 @@ export class WakeWordListener extends EventEmitter {
           else if (kwLower.includes('friday')) targetAgent = 'friday';
           else if (kwLower.includes('jarvis')) targetAgent = 'jarvis';
           else if (kwLower.includes('veronica')) targetAgent = 'veronica';
+          else if (kwLower.includes('edith')) targetAgent = 'edith';
 
           const isStopWord = /^(?:stop|wait|pause|quiet|cancel|listen|halt)$/i.test(res.keyword);
 
@@ -609,6 +737,35 @@ export class WakeWordListener extends EventEmitter {
             });
             break;
           } else {
+            // CRITICAL FIX: Stop words (Wait, Stop, Pause, Cancel, etc.) must NEVER wake Ultron in standby mode!
+            // They are strictly for barge-in interruptions while Ultron is currently speaking.
+            if (isStopWord) {
+              break;
+            }
+
+            // BIOMETRIC VOICE VERIFICATION GUARD:
+            // Prevent background media, TV, and phone reels from triggering wake words
+            if (this.voiceProfile && this.voiceProfile.isEnrolled()) {
+              const pcm = Buffer.concat(this.rollingWindowChunks);
+              const n = Math.floor(pcm.length / 2);
+              const samples = new Float32Array(n);
+              for (let i = 0; i < n; i++) samples[i] = pcm.readInt16LE(i * 2) / 32768.0;
+
+              const targetThresh = this.reelModeActive ? 0.14 : mediaActive ? 0.16 : 0.22;
+              const verify = this.voiceProfile.verifySpeaker(samples, targetThresh);
+
+              if (!verify.verified) {
+                const nowReject = Date.now();
+                if (nowReject - this.lastRejectedWakeAt > 2500) {
+                  this.lastRejectedWakeAt = nowReject;
+                  logger.info(
+                    `[REEL GUARD] Suppressed wake keyword "${res.keyword}" from unverified voice (dist: ${verify.distance.toFixed(3)} > ${verify.threshold.toFixed(3)}). Media/reel audio ignored.`,
+                  );
+                }
+                break;
+              }
+            }
+
             this.paused = true;
             this.standbyBurst = null;
             triggeredByKws = true;
@@ -631,7 +788,7 @@ export class WakeWordListener extends EventEmitter {
       if (this.bargeInVoiceFrames >= 2) {
         this.bargeInVoiceFrames = 0;
         const now = Date.now();
-        if (now - this.lastWakeAt > 800) {
+        if (now - this.lastWakeAt > WAKE_DEBOUNCE_MS) {
           this.lastWakeAt = now;
           this.emit('barge_in', {
             text: 'user_speaking',
@@ -669,9 +826,9 @@ export class WakeWordListener extends EventEmitter {
         this.standbyBurst.silenceMs += chunkMs;
       }
 
-      // Decode burst once user pauses for 950ms (or reaches 14s max duration)
-      // Increasing silence from 360ms to 950ms prevents mid-sentence breaths from prematurely splitting speech!
-      if (this.standbyBurst.silenceMs >= 950 || this.standbyBurst.totalMs >= 14000) {
+      // Fast burst decoding: 500ms pause triggers instant speech recognition (450ms faster answering!)
+      const requiredPause = this.standbyBurst.speechMs >= 800 ? 500 : 650;
+      if (this.standbyBurst.silenceMs >= requiredPause || this.standbyBurst.totalMs >= 14000) {
         const burst = this.standbyBurst;
         this.standbyBurst = null;
 
@@ -693,7 +850,8 @@ export class WakeWordListener extends EventEmitter {
               f32[i] = v > 1 ? 1 : v < -1 ? -1 : v;
             }
 
-            const transcript = this.localStt.transcribeSamples(f32);
+            const rawTranscript = this.localStt.transcribeSamples(f32);
+            const transcript = normalizeSpokenTranscript(rawTranscript);
             const isNonSpeech =
               !transcript ||
               /^[\[\(][^\]\)]+[\]\)]\s*\.?$/.test(transcript.trim());
@@ -725,7 +883,11 @@ export class WakeWordListener extends EventEmitter {
               const veronicaMatch = transcript.match(
                 /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:veronica|varonica|veronika)\b|^(?:veronica|varonica|veronika)[\s,.:!?-]/i,
               );
-              // 5. Check Commander Ultron (strict, no "electron" or "ultra on")
+              // 5. Check Agent Edith (Media & Content Editor - strict)
+              const edithMatch = transcript.match(
+                /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:edith|editor)\b|^(?:edith|editor)[\s,.:!?-]/i,
+              );
+              // 6. Check Commander Ultron (strict, no "electron" or "ultra on")
               const ultronMatch = transcript.match(
                 /\b(?:(?:hey|okay|ok|hi|hello|yo)\s+)(?:ultron|altron|oltron|eltron)\b|^(?:ultron|altron|oltron|eltron)[\s,.:!?-]?/i,
               );
@@ -755,6 +917,9 @@ export class WakeWordListener extends EventEmitter {
               }
               if (veronicaMatch && isDirectlyAddressed(veronicaMatch)) {
                 candidates.push({ agent: 'veronica', match: veronicaMatch, index: veronicaMatch.index, minCommandLen: 3 });
+              }
+              if (edithMatch && isDirectlyAddressed(edithMatch)) {
+                candidates.push({ agent: 'edith', match: edithMatch, index: edithMatch.index, minCommandLen: 3 });
               }
               if (ultronMatch && isDirectlyAddressed(ultronMatch)) {
                 candidates.push({ agent: 'ultron', match: ultronMatch, index: ultronMatch.index, minCommandLen: 3 });
@@ -801,6 +966,26 @@ export class WakeWordListener extends EventEmitter {
                 inlineCommand = vp.inlineCommand || '';
                 matchEngine = vp.reason || 'voice-profile';
                 this._lastTargetAgent = vp.targetAgent || 'ultron';
+              }
+            }
+
+            if (matched) {
+              // BIOMETRIC VOICE VERIFICATION GUARD:
+              // Strictly reject wakes caused by background reels, YouTube, or unverified speakers
+              if (this.voiceProfile && this.voiceProfile.isEnrolled()) {
+                const targetThresh = this.reelModeActive ? 0.14 : mediaActive ? 0.16 : 0.22;
+                const verify = this.voiceProfile.verifySpeaker(f32, targetThresh);
+
+                if (!verify.verified) {
+                  const nowReject = Date.now();
+                  if (nowReject - this.lastRejectedWakeAt > 2500) {
+                    this.lastRejectedWakeAt = nowReject;
+                    logger.info(
+                      `[BURST REEL GUARD] Suppressed false wake "${transcript}" from unverified voice (dist: ${verify.distance.toFixed(3)} > ${verify.threshold.toFixed(3)}). Media/reel audio ignored.`,
+                    );
+                  }
+                  matched = false;
+                }
               }
             }
 
@@ -914,26 +1099,26 @@ export class WakeWordListener extends EventEmitter {
     clearTimeout(rec.safetyTimer);
 
     if (ok && rec.heardSpeech && rec.chunks.length > 0) {
-      // Trim leading and trailing silence (keep ~400ms leading, ~480ms trailing padding so final words are never clipped!)
+      // Trim leading and trailing silence (keep ~600ms leading, ~500ms trailing padding so initial plosives like 'P'/'B' and final words are never clipped!)
       let firstIdx = rec.chunks.findIndex((c) => c.isSpeech);
       let lastIdx = rec.chunks.length - 1;
       while (lastIdx > firstIdx && !rec.chunks[lastIdx].isSpeech) {
         lastIdx--;
       }
       if (firstIdx < 0) firstIdx = 0;
-      const start = Math.max(0, firstIdx - 4);
+      const start = Math.max(0, firstIdx - 6);
       const end = Math.min(rec.chunks.length, lastIdx + 6);
       const trimmedBuffers = rec.chunks.slice(start, end).map((c) => c.buf);
       const pcm = Buffer.concat(trimmedBuffers);
 
-      // Gently normalize quiet desk-mic recordings so local & cloud STT both transcribe crisply
+      // Normalize desk-mic recordings dynamically so local & cloud STT both transcribe with extreme clarity
       const normPcm = Buffer.allocUnsafe(pcm.length);
       let peak = 1;
       for (let i = 0; i < pcm.length - 1; i += 2) {
         const a = Math.abs(pcm.readInt16LE(i));
         if (a > peak) peak = a;
       }
-      const gain = peak < 18000 ? Math.min(8.0, 22000 / peak) : 1.0;
+      const gain = peak < 20000 ? Math.min(12.0, 26000 / peak) : 1.0;
       for (let i = 0; i < pcm.length - 1; i += 2) {
         const v = Math.round(pcm.readInt16LE(i) * gain);
         normPcm.writeInt16LE(Math.max(-32767, Math.min(32767, v)), i);
@@ -971,6 +1156,7 @@ export class WakeWordListener extends EventEmitter {
     if (this.muted) return;
     this.standbyBurst = null;
     this.preRollChunks = [];
+    this.lastWakeAt = Date.now(); // Post-wake cooldown so trailing speech or echo does not re-trigger
     if (this.kws && this.kwsStream) {
       try {
         this.kws.reset(this.kwsStream);

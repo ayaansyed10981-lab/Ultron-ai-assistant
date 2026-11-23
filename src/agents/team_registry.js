@@ -88,6 +88,22 @@ export const ULTRON_TEAM = {
       ],
       avatar: '🎬',
     },
+    edith: {
+      id: 'edith',
+      name: 'Edith',
+      alias: 'Editor / Media / Content',
+      wakeWords: ['Hey Edith', 'Edith', 'Okay Edith', 'OK Edith'],
+      title: 'Chief Media & Content Editor',
+      description:
+        'Specialized in precision video and reel editing, clip trimming, audio extraction, Microsoft Word (.docx) document refactoring and proofreading, and script/content polishing.',
+      skills: [
+        'Precision Video & Reel Editing (Trimming, Cutting, Audio Extraction, Shorts)',
+        'Microsoft Word (.docx) Document Refactoring, Editing & Tone Proofreading',
+        'Script, Speech & Content Polishing (Executive, Persuasive, Punchy, Technical)',
+        'Autonomous Edit Storage in ~/UltronEdits and ~/UltronDocuments',
+      ],
+      avatar: '✂️',
+    },
     sentinel: {
       id: 'sentinel',
       name: 'Sentinel',
@@ -128,6 +144,7 @@ export function getSpokenTeamIntro() {
     'Friday is our Executive Document Architect for Word documents and PDF reports. You can talk to her directly anytime by saying "Hey Friday". ' +
     'Jarvis is our Chief Quality Assurance Engineer, auditing and verifying all deliverables. You can talk to him directly anytime by saying "Hey Jarvis". ' +
     'Veronica is our Chief Visual Media Director for cinematic video loops, imagery, and scrollytelling designs. You can talk to her directly anytime by saying "Hey Veronica". ' +
+    'Edith is our Chief Media & Content Editor for precision video trimming, reel editing, document polishing, and content refinement. You can talk to her directly anytime by saying "Hey Edith". ' +
     'And I am Ultron, commanding your PC and coordinating the team. You can speak to any of us individually, or command all of us to execute simultaneously whenever you wish.'
   );
 }
@@ -148,6 +165,10 @@ export function getVeronicaIntro() {
   return 'I am Veronica, your Chief Visual Media Director, sir. Tell me what visual branding, image assets, or cinematic video loops you would like me to create.';
 }
 
+export function getEdithIntro() {
+  return 'I am Edith, your Chief Media & Content Editor, sir. Tell me what video you would like me to trim or edit, or what document or content you need polished.';
+}
+
 export function getUltronIntro() {
-  return 'I am Ultron, Supreme Commander of your personal multi-agent AI team, sir. I lead Vision for software and SQL, Friday for Word and PDF documents, Jarvis for quality assurance and verification, Veronica for visual media and videos, and Sentinel for PC control.';
+  return 'I am Ultron, Supreme Commander of your personal multi-agent AI team, sir. I lead Vision for software and SQL, Friday for Word and PDF documents, Jarvis for quality assurance and verification, Veronica for visual media and videos, Edith for video and content editing, and Sentinel for PC control.';
 }

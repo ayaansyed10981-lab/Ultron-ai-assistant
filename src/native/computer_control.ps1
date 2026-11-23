@@ -246,6 +246,11 @@ function Handle-Action($req) {
                 "next_track"  { [Win32Control]::TapKey(0xB0); return @{ message = "Skipped to next track" } }
                 "prev_track"  { [Win32Control]::TapKey(0xB1); return @{ message = "Went to previous track" } }
                 "stop_media"  { [Win32Control]::TapKey(0xB2); return @{ message = "Stopped media playback" } }
+                "fullscreen"        { [Win32Control]::TapKey(0x46); return @{ message = "Toggled video fullscreen" } }
+                "fullscreen_video"  { [Win32Control]::TapKey(0x46); return @{ message = "Toggled video fullscreen" } }
+                "fullscreen_browser"{ [Win32Control]::TapKey(0x7A); return @{ message = "Toggled browser fullscreen" } }
+                "exit_fullscreen"   { [Win32Control]::TapKey(0x1B); return @{ message = "Exited fullscreen" } }
+                "theater_mode"      { [Win32Control]::TapKey(0x54); return @{ message = "Toggled theater mode" } }
                 default       { throw "Unknown media/volume command: $cmd" }
             }
         }

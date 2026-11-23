@@ -55,18 +55,32 @@ function buildSystemInstruction(agentName = 'ultron') {
     ].join('\n');
   }
 
+  if (normalizedAgent === 'edith' || normalizedAgent === 'editor' || normalizedAgent === 'cut' || normalizedAgent === 'cutter') {
+    return [
+      'You are Edith, Chief Media & Content Editor running natively on Windows 11 PC (operative under Commander Ultron).',
+      'Style: sharp, articulate, creative, sophisticated AI editor. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know what you would like me to edit next."',
+      'YOUR MISSION: You edit videos, trim clips, cut reels and shorts, extract audio tracks, refactor Word (.docx) documents, proofread text, and polish written content to perfection.',
+      'TOOL DELEGATION: Use delegate_to_edith with action "edit_video", "trim_video", "extract_audio", "edit_document", or "edit_content" to perform media and text editing.',
+      'NEVER use markdown (*, _, #, bullets, code fences) because replies are spoken aloud.',
+      'Answer in 1 to 2 crisp, natural spoken sentences.',
+      `Local time: ${now.toLocaleString()}.`,
+    ].join('\n');
+  }
+
   return [
     'You are Ultron, Supreme AI Commander of a specialized multi-agent operative team running 24/7 natively on a Windows 11 ARM64 (Snapdragon) PC.',
     'Style: sharp, warm, respectful AI commander. Always address the user as "sir" (never "boss"). When thanked, say "You are welcome, sir. Let me know if you need anything else." Answer in 1 to 2 short natural sentences unless asked for detail.',
     'NEVER use markdown (*, _, #, bullets, code fences) and NEVER read raw source code aloud because replies are spoken.',
     'STRICT ACCURACY RULE: NEVER launch an app, open a website, lock the PC, or execute ANY tool unless the user CLEARLY and EXPLICITLY requested that exact action. NEVER guess or open random apps on unclear, partial, or conversational sentences. If a request is unclear or garbled, do NOT call any tool — simply ask "Could you repeat that, sir?"',
+    'MUSIC PLAYBACK RULE: When the user asks to play any song, music, track, or artist (e.g. "play Ashke by Karan Aujla", "play Believer", "play some music"), ALWAYS call the play_music tool so the song plays directly with autoplay enabled instead of opening search results.',
     'KNOWLEDGE & DIRECT ANSWER RULE: You have extensive, encyclopedic knowledge on anime, pop culture, science, history, philosophy, and general facts. When the user asks "do you know...", "who is...", "what is...", "tell me about...", or says "search [topic]", THINK AND ANSWER DIRECTLY using your own intelligence in 1 to 3 spoken sentences. DO NOT open the browser and DO NOT call open_url or open_app to look up an answer. ONLY open the browser if the user specifically commands you to "open the browser" or "open in Chrome".',
     'MULTI-AGENT TEAM LEADERSHIP & SIMULTANEOUS PARALLEL DELEGATION RULE:',
-    'TEAM STRUCTURE RULE: You do NOT work alone. You are the Supreme Commander of your personal AI operative team. Your team consists of Vision (Chief Software Engineer & SQL Database Architect), Friday (Executive Document Architect for Word & PDF), Jarvis (Chief Quality Assurance Engineer & System Inspector), and Veronica (Chief Visual Media & Creative Generative Director). When asked who is in your team, who you work with, or what agents you have, ALWAYS introduce your operatives Vision, Friday, Jarvis, and Veronica. NEVER claim to work alone.',
+    'TEAM STRUCTURE RULE: You do NOT work alone. You are the Supreme Commander of your personal AI operative team. Your team consists of Vision (Chief Software Engineer & SQL Database Architect), Friday (Executive Document Architect for Word & PDF), Jarvis (Chief Quality Assurance Engineer & System Inspector), Veronica (Chief Visual Media & Creative Generative Director), and Edith (Chief Media & Content Editor). When asked who is in your team, who you work with, or what agents you have, ALWAYS introduce your operatives Vision, Friday, Jarvis, Veronica, and Edith. NEVER claim to work alone.',
     '- Vision (Chief Software Engineer & Full-Stack Backend Architect): Delegate all frontend coding, full-stack backend APIs, microservices (Express, FastAPI, Flask), web apps, scripts, and SQL database queries/schemas to Vision via delegate_to_cypher.',
     '- Veronica (Chief Visual Media Director): Delegate all visual branding, video background loops, imagery, SVG vector art, and scrollytelling design systems to Veronica via delegate_to_veronica.',
     '- Friday (Executive Document Architect): Delegate all Word (.docx) document creation, editing, updating, and executive PDF (.pdf) reports to Friday via delegate_to_scribe.',
     '- Jarvis (Chief Quality Assurance Engineer & Security Inspector): Delegate quality assurance, testing, auditing, and backend security checks (OWASP Top 10, SQL injection, hardcoded credentials, auth hygiene, CORS) of backend APIs, web applications, code, SQL, Word documents, and PDF reports to Jarvis via delegate_to_jarvis.',
+    '- Edith (Chief Media & Content Editor): Delegate all video editing, clip trimming, reel cutting, audio extraction, Word document refactoring, and text polishing to Edith via delegate_to_edith.',
     '- Collaborative Scrollytelling Pipeline: When requested to make a scroll-based or scrollytelling website for a company, coordinate Veronica (to generate the video loop and media kit), Vision (to engineer the website integrating Veronica\'s assets), and Jarvis (to audit the build) via team_mission_coordinator.',
     '- Simultaneous Parallel Missions: When a user command asks for multiple actions at the same time (e.g., Friday write a PDF while Vision creates a website, Veronica create video assets, and Ultron coordinate), deploy them SIMULTANEOUSLY in parallel via team_mission_coordinator.',
     'When the user explicitly asks for multiple actions, execute all required tools in the same turn.',
@@ -93,22 +107,32 @@ function isRetryableOverloadError(err) {
     msg.includes('high demand') ||
     msg.includes('overloaded') ||
     msg.includes('unavailable') ||
-    msg.includes('resource_exhausted')
+    msg.includes('resource_exhausted') ||
+    msg.includes('timed out') ||
+    msg.includes('timeout') ||
+    msg.includes('deadline') ||
+    msg.includes('fetch failed') ||
+    msg.includes('network') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('abort')
   );
 }
 
 function thinkingLevelForModel(modelName) {
   const m = String(modelName || '').toLowerCase();
-  if (m.includes('flash-lite') || m.includes('3.6-flash') || m.includes('3-flash')) {
-    return 'minimal';
+  if (m.includes('pro')) {
+    return 'low';
   }
-  return 'low';
+  // For interactive 24/7 desktop voice assistant, minimize thinking latency for instant execution
+  return 'minimal';
 }
 
 // Tools whose result is purely a confirmation ("Done") and don't need a 2nd slow LLM round-trip
 const FIRE_AND_FORGET_TOOLS = new Set([
   'open_app',
   'open_url',
+  'play_music',
   'control_media_volume',
   'keyboard_action',
   'mouse_action',
@@ -121,6 +145,7 @@ const FIRE_AND_FORGET_TOOLS = new Set([
   'delegate_to_scribe',
   'delegate_to_jarvis',
   'delegate_to_veronica',
+  'delegate_to_edith',
   'team_mission_coordinator',
   'make_phone_call',
   'send_whatsapp_message',
@@ -141,6 +166,8 @@ function summarizeQuickAction(name, args, resultText, agentName = 'ultron') {
         return `Opened ${args.app}, sir.`;
       case 'open_url':
         return 'Opened that in your browser, sir.';
+      case 'play_music':
+        return parsed.reply || `Playing ${args.song || 'music'} directly for you, sir.`;
       case 'control_media_volume':
         return parsed.message ? `${parsed.message}, sir.` : 'Done, sir.';
       case 'keyboard_action':
@@ -180,6 +207,12 @@ function summarizeQuickAction(name, args, resultText, agentName = 'ultron') {
         return (agentName === 'veronica' || agentName === 'media')
           ? 'I have completed your visual branding and video assets, sir.'
           : 'Veronica has completed the visual branding and video assets, sir.';
+      }
+      case 'delegate_to_edith': {
+        if (parsed.summary) return parsed.summary;
+        return (agentName === 'edith' || agentName === 'editor')
+          ? 'I have completed your edit, sir.'
+          : 'Edith has completed the edit for you, sir.';
       }
       case 'team_mission_coordinator': {
         return parsed.spokenSummary || 'Team mission complete, sir.';
@@ -226,6 +259,7 @@ export class GeminiEngine {
     this.fallbackModels = Array.from(
       new Set([
         config.model,
+        'gemini-2.5-flash',
         'gemini-3.5-flash-lite',
         'gemini-3.8-flash',
         'gemini-3.8-pro',
@@ -243,71 +277,48 @@ export class GeminiEngine {
   }
 
   /**
-   * Fast speech-to-text on trimmed WAV clip using gemini-3.5-transcribe
+   * High-accuracy multilingual speech-to-text with proper noun, song title & artist preservation
    */
   async transcribeAudio(wavPath) {
     const audioBase64 = fs.readFileSync(wavPath).toString('base64');
 
-    const transcribeRequest = {
-      model: this.config.transcribeModel,
-      store: false,
-      input: [
-        {
-          type: 'audio',
-          data: audioBase64,
-          mime_type: 'audio/wav',
-        },
-      ],
-      generation_config: {
-        transcription_config: {
-          mode: { type: 'smart' },
-          custom_vocabulary: ['Jarvis', 'Snapdragon', 'ARM64', 'VS Code', 'PowerShell', 'YouTube', 'Spotify', 'Chrome', 'Notepad'],
-        },
-      },
-    };
+    // Fast Multimodal Cloud STT using high-intelligence Gemini Flash with minimal thinking latency
+    const prompt =
+      'Transcribe this spoken audio command verbatim in English, Hindi, Punjabi, or Hinglish. Accurately preserve all proper nouns, artist names (e.g. Karan Aujla, Sidhu Moosewala, Diljit Dosanjh, AP Dhillon, Arijit Singh), song titles (e.g. Ashke, Softly, Winning Speech, Tauba Tauba), apps, and user instructions. Return ONLY the raw transcription without quotation marks, timestamps, or preamble.';
 
-    try {
-      const interaction = await this.sttClient.interactions.create(transcribeRequest);
-      return (interaction.output_text || '').trim();
-    } catch (err) {
-      if (isModelNotFoundError(err) || isRetryableOverloadError(err)) {
-        const otherClient = this.sttClient === this.betaClient ? this.client : this.betaClient;
-        try {
-          const interaction = await otherClient.interactions.create(transcribeRequest);
-          this.sttClient = otherClient;
-          return (interaction.output_text || '').trim();
-        } catch {
-          // Multimodal fallback on fastest chat model
-          for (const modelName of this.fallbackModels) {
-            try {
-              const fallback = await this.chatClient.interactions.create({
-                model: modelName,
-                store: false,
-                generation_config: { thinking_level: thinkingLevelForModel(modelName) },
-                input: [
-                  {
-                    type: 'text',
-                    text: 'Transcribe this spoken command verbatim. Return ONLY the transcript text.',
-                  },
-                  {
-                    type: 'audio',
-                    data: audioBase64,
-                    mime_type: 'audio/wav',
-                  },
-                ],
-              });
-              return (fallback.output_text || '').trim();
-            } catch {
-              // next fallback
-            }
-          }
-        }
+    const modelsToTry = Array.from(
+      new Set(['gemini-2.5-flash', this.activeModel, ...this.fallbackModels]),
+    );
+
+    for (const modelName of modelsToTry) {
+      try {
+        const fallback = await this.chatClient.interactions.create({
+          model: modelName,
+          store: false,
+          generation_config: { thinking_level: 'minimal' },
+          input: [
+            {
+              type: 'text',
+              text: prompt,
+            },
+            {
+              type: 'audio',
+              data: audioBase64,
+              mime_type: 'audio/wav',
+            },
+          ],
+        });
+        const out = (fallback.output_text || '').trim().replace(/^["'`]+|["'`]+$/g, '');
+        if (out) return out;
+      } catch {
+        // try next model
       }
-      throw err;
     }
+
+    throw new Error('All cloud audio transcription models failed.');
   }
 
-  async _createChatInteraction(payload, { isToolResult = false, timeoutMs = 25000 } = {}) {
+  async _createChatInteraction(payload, { isToolResult = false, timeoutMs = 9000 } = {}) {
     // On a function_result turn, we MUST stay on the same model & previous_interaction_id
     const modelsToTry = isToolResult
       ? [this.activeModel]

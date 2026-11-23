@@ -7,6 +7,7 @@ import {
   LocalSpeechRecognizer,
   SystemTrayController,
   WakeWordListener,
+  normalizeSpokenTranscript,
 } from './audio.js';
 import { ENV_PATH, TEMP_DIR, loadConfig, saveApiKeyToEnv } from './config.js';
 import { tryFastPath } from './fastpath.js';
@@ -118,6 +119,7 @@ class JarvisDaemon {
 
     this.controller.setActiveTasksGetter((agent) => this.getActiveTasksSummary(agent));
     this.controller.setCallModeHandler((enabled, durationMins) => this.setCallMode(enabled, durationMins));
+    this.controller.setReelModeHandler((enabled, durationMins) => this.setReelMode(enabled, durationMins));
   }
 
   getActiveTasksSummary(targetAgent = null) {
@@ -151,13 +153,14 @@ class JarvisDaemon {
   }
 
   getListeningStatusText() {
+    const reelSuffix = this.wakeListener?.reelModeActive ? ' [Reels Guard Active]' : '';
     if (this.activeAgentTasks.size === 0) {
-      return 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis, Veronica)';
+      return `Ultron Team - Listening (Ultron, Vision, Friday, Jarvis, Veronica, Edith)${reelSuffix}`;
     }
     const busyAgents = Array.from(
       new Set(Array.from(this.activeAgentTasks.values()).map((t) => t.agent.toUpperCase())),
     );
-    return `Ultron Team - Listening (${busyAgents.join(', ')} working in background)`;
+    return `Ultron Team - Listening (${busyAgents.join(', ')} working in background)${reelSuffix}`;
   }
 
   openHud() {
@@ -324,9 +327,9 @@ class JarvisDaemon {
     // Wire 24/7 Offline Neural Wake-Word Listener events
     this.wakeListener.on('ready', (info) => {
       logger.info(
-        `Offline neural wake-word engine active (${info.words.join(', ')}). Standing by 24/7 for Ultron, Vision, Friday, Jarvis, and Veronica.`,
+        `Offline neural wake-word engine active (${info.words.join(', ')}). Standing by 24/7 for Ultron, Vision, Friday, Jarvis, Veronica, and Edith.`,
       );
-      this.tray.setStatus('idle', 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis, Veronica)');
+      this.tray.setStatus('idle', 'Ultron Team - Listening (Ultron, Vision, Friday, Jarvis, Veronica, Edith)');
     });
 
     this.wakeListener.on('wake', (info) => {
@@ -524,6 +527,19 @@ class JarvisDaemon {
     }
   }
 
+  setReelMode(enabled, durationMins = 60) {
+    if (this.wakeListener) {
+      this.wakeListener.setReelMode(enabled, durationMins * 60 * 1000);
+    }
+    this.updateTrayStatus();
+    if (this.hudServer) {
+      this.hudServer.broadcast('reel_mode', {
+        active: Boolean(enabled),
+        durationMins: enabled ? durationMins : 0,
+      });
+    }
+  }
+
   async triggerVoiceInteraction(source = 'Wake Word', initialCommand = '', targetAgent = null) {
     if (this.busy || this.shuttingDown || this.muted || this.inCallMode) return;
 
@@ -554,7 +570,11 @@ class JarvisDaemon {
           ? 'Friday (Word & PDF)'
           : this.activeAgent === 'jarvis' || this.activeAgent === 'inspector' || this.activeAgent === 'qa'
             ? 'Jarvis (QA & Inspector)'
-            : 'Ultron';
+            : this.activeAgent === 'veronica' || this.activeAgent === 'media'
+              ? 'Veronica (Visuals & Media)'
+              : this.activeAgent === 'edith' || this.activeAgent === 'editor'
+                ? 'Edith (Media & Content Editor)'
+                : 'Ultron';
     this.tray.setStatus('active', `${agentLabel} - Listening...`);
 
     try {
@@ -597,6 +617,7 @@ class JarvisDaemon {
           if (!isFollowUp) {
             // Instant wake reply matching whichever agent was called!
             await this.audioOut.wakeReplyForAgent(this.activeAgent);
+            this.lastWakeReplyAt = Date.now();
             logger.info(`Listening for command (${source}) [Active: ${this.activeAgent}]...`);
           } else {
             logger.info(`Listening for follow-up (${this.config.followUpSeconds}s window) [Active: ${this.activeAgent}]...`);
@@ -631,13 +652,29 @@ class JarvisDaemon {
             this.tray.setStatus('active', `${agentLabel} - Understanding...`);
             if (this.config.sttEngine === 'local' && this.localStt.isAvailable()) {
               transcript = this.localStt.transcribeWav(rec.path) || '';
+            } else if (this.localStt && this.localStt.isAvailable()) {
+              // Hybrid Mode: Fast Local Whisper Base (< 150ms) first!
+              transcript = this.localStt.transcribeWav(rec.path) || '';
+              // If local STT returned silence, empty, or non-speech bracket tag, fall back to multimodal cloud STT
+              if (!transcript || /^[\[\(][^\]\)]+[\]\)]\s*\.?$/.test(transcript.trim())) {
+                try {
+                  transcript = await this.gemini.transcribeAudio(rec.path);
+                } catch (cloudErr) {
+                  // Keep local transcript if cloud also fails
+                }
+              }
             } else {
+              // Pure Cloud STT if local engine not available
               transcript = await this.gemini.transcribeAudio(rec.path);
             }
           } catch (err) {
             logger.error(`Transcription error: ${err.message}`);
-            await this.speak('Sorry sir, I could not transcribe that.');
-            break;
+            if (this.localStt && this.localStt.isAvailable()) {
+              transcript = this.localStt.transcribeWav(rec.path) || '';
+            } else {
+              await this.speak('Sorry sir, I could not transcribe that.');
+              break;
+            }
           } finally {
             try {
               fs.unlinkSync(rec.path);
@@ -646,6 +683,9 @@ class JarvisDaemon {
             }
           }
           sttMs = Date.now() - t0;
+
+          // Apply intelligent phonetic normalization (fixes "or skate" -> "ashke", "pay" -> "play", artist names)
+          transcript = normalizeSpokenTranscript(transcript);
 
           const trimmedTranscript = (transcript || '').trim();
           const lettersOnly = trimmedTranscript.replace(/[^a-zA-Z0-9]/g, '');
@@ -679,27 +719,42 @@ class JarvisDaemon {
           await this.speak('You are welcome, sir. Let me know if you need anything else.');
           break; // Immediately return to standby so follow-up doesn't capture your next conversation!
         }
-        if (/^(?:hey|here|ok|okay)?\s*(?:ultron|altron|tron|drone|prawn|john|anton|turn)$/.test(lower)) {
-          this.activeAgent = 'ultron';
-          await this.audioOut.wakeReplyForAgent('ultron');
-          isFollowUp = true;
-          continue;
-        }
-        if (/^(?:hey|ok|okay)?\s*(?:vision|vizion|vishon|vison|vishan|region|legion|vyram|revision|coder|cypher|code)$/i.test(lower)) {
-          this.activeAgent = 'vision';
-          await this.audioOut.wakeReplyForAgent('vision');
-          isFollowUp = true;
-          continue;
-        }
-        if (/^(?:hey|ok|okay)?\s*(?:friday|fryday|fry\s*day)$/i.test(lower)) {
-          this.activeAgent = 'friday';
-          await this.audioOut.wakeReplyForAgent('friday');
-          isFollowUp = true;
-          continue;
-        }
-        if (/^(?:hey|ok|okay)?\s*(?:jarvis|charvis|jarviss|jarviz|service)$/i.test(lower)) {
-          this.activeAgent = 'jarvis';
-          await this.audioOut.wakeReplyForAgent('jarvis');
+        // Strict Wake-Word Debounce & Agent Addressing
+        // Handles single or repeated wake words (e.g. "hey ultron", "ultron ultron", "hey ultron hey ultron")
+        // Responds AT MOST ONCE even if the user calls 30 times in the same session!
+        const WAKE_WORD_NAMES = '(?:ultron|altron|tron|drone|prawn|john|anton|turn|vision|vizion|vishon|vison|vishan|region|legion|vyram|revision|coder|cypher|code|friday|fryday|fry\\s*day|jarvis|charvis|jarviss|jarviz|service|veronica|varonica|veronika|edith|editor|cutter)';
+        const WAKE_PREFIXES = '(?:hey|here|ok|okay|hi|hello|yo)';
+        const isOnlyWakeWords = new RegExp(
+          `^(?:(?:${WAKE_PREFIXES}\\s+)?${WAKE_WORD_NAMES}[\\s,.:!?-]*)+$`,
+          'i'
+        ).test(lower);
+
+        if (isOnlyWakeWords) {
+          let targetAgent = 'ultron';
+          if (/\b(?:vision|vizion|vishon|vison|vishan|region|legion|vyram|revision|coder|cypher|code)\b/i.test(lower)) {
+            targetAgent = 'vision';
+          } else if (/\b(?:friday|fryday|fry\s*day)\b/i.test(lower)) {
+            targetAgent = 'friday';
+          } else if (/\b(?:jarvis|charvis|jarviss|jarviz|service)\b/i.test(lower)) {
+            targetAgent = 'jarvis';
+          } else if (/\b(?:veronica|varonica|veronika)\b/i.test(lower)) {
+            targetAgent = 'veronica';
+          } else if (/\b(?:edith|editor|cutter)\b/i.test(lower)) {
+            targetAgent = 'edith';
+          }
+
+          const isAgentSwitch = this.activeAgent !== targetAgent;
+          const timeSinceLastGreeting = Date.now() - (this.lastWakeReplyAt || 0);
+
+          if (isAgentSwitch || timeSinceLastGreeting > 8000) {
+            this.activeAgent = targetAgent;
+            await this.audioOut.wakeReplyForAgent(targetAgent);
+            this.lastWakeReplyAt = Date.now();
+          } else {
+            logger.info(
+              `[DEBOUNCE] User repeated wake word "${lower}" while ${this.activeAgent} is already active. Suppressed duplicate reply (responded at most once).`,
+            );
+          }
           isFollowUp = true;
           continue;
         }
@@ -761,7 +816,9 @@ class JarvisDaemon {
                       ? 'On it, sir. Commencing quality assurance inspection in the background. Standing by.'
                       : this.activeAgent === 'veronica'
                         ? 'On it, sir. Generating visual assets and video loop now in the background.'
-                        : 'On it, sir. Processing that in the background now.';
+                        : this.activeAgent === 'edith'
+                          ? 'On it, sir. Executing media and content edits now in the background.'
+                          : 'On it, sir. Processing that in the background now.';
 
               this.tray.setStatus('active', `${this.activeAgent} - Speaking...`);
               await this.speak(ack);
@@ -782,7 +839,45 @@ class JarvisDaemon {
           } else if (msg.includes('429') || msg.includes('quota') || msg.includes('rate limit')) {
             reply = 'Gemini free tier rate limit reached for a moment, sir. Please try again in a few seconds.';
           } else {
-            reply = 'Gemini servers took too long to respond, sir. Please try that again.';
+            // Local Native Computer Control Fallback:
+            // If the user commanded a video, media, or volume control, execute it locally directly
+            // so network hiccups or server delays never prevent simple tasks from completing!
+            let fallbackExecuted = false;
+            try {
+              if (/\b(?:fullscreen|full\s+screen)\b/i.test(lower) && /\b(?:resume|play|unpause)\b/i.test(lower)) {
+                await this.controller.executeTool('control_media_volume', { command: 'fullscreen' });
+                await new Promise((r) => setTimeout(r, 60));
+                await this.controller.executeTool('control_media_volume', { command: 'play_pause' });
+                reply = 'Fullscreen toggled and video resumed locally, sir.';
+                fallbackExecuted = true;
+              } else if (/\b(?:fullscreen|full\s+screen)\b/i.test(lower)) {
+                await this.controller.executeTool('control_media_volume', { command: 'fullscreen' });
+                reply = 'Fullscreen toggled locally, sir.';
+                fallbackExecuted = true;
+              } else if (/\b(?:resume|unpause|play|pause)\b/i.test(lower)) {
+                await this.controller.executeTool('control_media_volume', { command: 'play_pause' });
+                reply = 'Media playback toggled locally, sir.';
+                fallbackExecuted = true;
+              } else if (/\b(?:volume\s+up|increase\s+volume|louder)\b/i.test(lower)) {
+                await this.controller.executeTool('control_media_volume', { command: 'volume_up', steps: 5 });
+                reply = 'Volume increased locally, sir.';
+                fallbackExecuted = true;
+              } else if (/\b(?:volume\s+down|decrease\s+volume|lower\s+volume|quieter)\b/i.test(lower)) {
+                await this.controller.executeTool('control_media_volume', { command: 'volume_down', steps: 5 });
+                reply = 'Volume decreased locally, sir.';
+                fallbackExecuted = true;
+              } else if (/\b(?:mute|unmute)\b/i.test(lower)) {
+                await this.controller.executeTool('control_media_volume', { command: 'mute' });
+                reply = 'Mute toggled locally, sir.';
+                fallbackExecuted = true;
+              }
+            } catch (fbErr) {
+              logger.warn(`Local fallback execution error: ${fbErr.message}`);
+            }
+
+            if (!fallbackExecuted) {
+              reply = 'Gemini servers took too long to respond, sir. Please try that again.';
+            }
           }
         }
 
@@ -805,7 +900,7 @@ class JarvisDaemon {
           }
 
           let newCommand = rawCmd
-            .replace(/^(?:hey|okay|ok)?\s*(?:ultron|vision|friday|jarvis|veronica)\b/i, '')
+            .replace(/^(?:hey|okay|ok)?\s*(?:ultron|vision|friday|jarvis|veronica|edith)\b/i, '')
             .replace(/^(?:wait|listen|pause|hold on)\s*,?\s*/i, '')
             .trim();
 
@@ -817,6 +912,7 @@ class JarvisDaemon {
           } else {
             // User said "Hey Ultron" or interrupted by speaking: prompt them and record!
             await this.audioOut.wakeReplyForAgent(this.activeAgent);
+            this.lastWakeReplyAt = Date.now();
             isFollowUp = false;
             pendingInlineCommand = '';
             continue;
