@@ -110,6 +110,23 @@ export class ComputerController {
     }
   }
 
+  async closeApp(app = 'this', force = false) {
+    return this._callNative('close_app', { app, force });
+  }
+
+  async setVolume(percent) {
+    return this._callNative('media_volume', { command: 'set_volume', percent });
+  }
+
+  async getVolume() {
+    return this._callNative('media_volume', { command: 'get_volume' });
+  }
+
+  async adjustVolume(delta) {
+    const cmd = delta >= 0 ? 'volume_up' : 'volume_down';
+    return this._callNative('media_volume', { command: cmd, delta: Math.abs(delta) });
+  }
+
   async checkCallStatus() {
     try {
       const data = await this._callNative('check_call_status', {});
@@ -286,7 +303,10 @@ export class ComputerController {
               enum: [
                 'volume_up',
                 'volume_down',
+                'set_volume',
+                'get_volume',
                 'mute',
+                'unmute',
                 'play_pause',
                 'next_track',
                 'prev_track',
@@ -299,12 +319,41 @@ export class ComputerController {
               ],
               description: 'The volume or media action to perform.',
             },
+            percent: {
+              type: 'integer',
+              description: 'Target volume percentage (0 to 100) when command is "set_volume".',
+            },
+            delta: {
+              type: 'integer',
+              description: 'Relative volume percentage change (e.g. 10, 15, 20) for volume_up or volume_down.',
+            },
             steps: {
               type: 'integer',
               description: 'Number of steps for volume_up or volume_down (default 5, each step is ~2%).',
             },
           },
           required: ['command'],
+        },
+      },
+      {
+        type: 'function',
+        name: 'close_app',
+        description:
+          'Close an open application by name (e.g. "chrome", "notepad", "word", "spotify", "vscode", "calculator", "edge", "task manager") or close the active/current window or tab.',
+        parameters: {
+          type: 'object',
+          properties: {
+            app: {
+              type: 'string',
+              description:
+                'Friendly app name (e.g. "chrome", "notepad", "word", "spotify"), executable name, or "this"/"current"/"window" for foreground window, or "tab" for active browser tab.',
+            },
+            force: {
+              type: 'boolean',
+              description: 'Whether to force terminate if the application does not close gracefully.',
+            },
+          },
+          required: ['app'],
         },
       },
       {
@@ -914,6 +963,11 @@ export class ComputerController {
       switch (name) {
         case 'open_app': {
           const data = await this._callNative('open_app', args);
+          return { text: JSON.stringify({ ok: true, ...data }) };
+        }
+
+        case 'close_app': {
+          const data = await this._callNative('close_app', args);
           return { text: JSON.stringify({ ok: true, ...data }) };
         }
 

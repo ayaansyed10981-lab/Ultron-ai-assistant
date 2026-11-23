@@ -73,6 +73,7 @@ function buildSystemInstruction(agentName = 'ultron') {
     'NEVER use markdown (*, _, #, bullets, code fences) and NEVER read raw source code aloud because replies are spoken.',
     'STRICT ACCURACY RULE: NEVER launch an app, open a website, lock the PC, or execute ANY tool unless the user CLEARLY and EXPLICITLY requested that exact action. NEVER guess or open random apps on unclear, partial, or conversational sentences. If a request is unclear or garbled, do NOT call any tool — simply ask "Could you repeat that, sir?"',
     'MUSIC PLAYBACK RULE: When the user asks to play any song, music, track, or artist (e.g. "play Ashke by Karan Aujla", "play Believer", "play some music"), ALWAYS call the play_music tool so the song plays directly with autoplay enabled instead of opening search results.',
+    'APP & VOLUME CONTROL RULE: When the user asks to close an application, window, or tab, call the close_app tool. When the user asks to adjust, set, or mute/unmute audio volume, call the control_media_volume tool.',
     'KNOWLEDGE & DIRECT ANSWER RULE: You have extensive, encyclopedic knowledge on anime, pop culture, science, history, philosophy, and general facts. When the user asks "do you know...", "who is...", "what is...", "tell me about...", or says "search [topic]", THINK AND ANSWER DIRECTLY using your own intelligence in 1 to 3 spoken sentences. DO NOT open the browser and DO NOT call open_url or open_app to look up an answer. ONLY open the browser if the user specifically commands you to "open the browser" or "open in Chrome".',
     'MULTI-AGENT TEAM LEADERSHIP & SIMULTANEOUS PARALLEL DELEGATION RULE:',
     'TEAM STRUCTURE RULE: You do NOT work alone. You are the Supreme Commander of your personal AI operative team. Your team consists of Vision (Chief Software Engineer & SQL Database Architect), Friday (Executive Document Architect for Word & PDF), Jarvis (Chief Quality Assurance Engineer & System Inspector), Veronica (Chief Visual Media & Creative Generative Director), and Edith (Chief Media & Content Editor). When asked who is in your team, who you work with, or what agents you have, ALWAYS introduce your operatives Vision, Friday, Jarvis, Veronica, and Edith. NEVER claim to work alone.',
@@ -131,6 +132,7 @@ function thinkingLevelForModel(modelName) {
 // Tools whose result is purely a confirmation ("Done") and don't need a 2nd slow LLM round-trip
 const FIRE_AND_FORGET_TOOLS = new Set([
   'open_app',
+  'close_app',
   'open_url',
   'play_music',
   'control_media_volume',
@@ -164,6 +166,8 @@ function summarizeQuickAction(name, args, resultText, agentName = 'ultron') {
         return parsed.message || 'Placing that call for you now, sir.';
       case 'open_app':
         return `Opened ${args.app}, sir.`;
+      case 'close_app':
+        return parsed.message ? `${parsed.message}, sir.` : `Closed ${args.app || 'that app'}, sir.`;
       case 'open_url':
         return 'Opened that in your browser, sir.';
       case 'play_music':

@@ -285,7 +285,7 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
 
   // 0.25 Call Mode & In-Call Mute Protection (<2ms)
   const callMuteMatch = text.match(
-    /^(?:i(?:'m| am) (?:on|in) (?:a )?call|i(?:'m| am) in (?:a )?meeting|call mode(?: on)?|meeting mode(?: on)?|do not disturb(?: mode)?|mute(?:\s+for\s+(\d+)\s*(?:minutes?|mins?))?)$/i,
+    /^(?:i(?:'m| am) (?:on|in) (?:a )?call|i(?:'m| am) in (?:a )?meeting|call mode(?: on)?|meeting mode(?: on)?|do not disturb(?: mode)?|mute\s+for\s+(\d+)\s*(?:minutes?|mins?)|mute\s+(?:yourself|operatives?|assistant))$/i,
   );
   if (callMuteMatch) {
     const mins = callMuteMatch[1] ? Number.parseInt(callMuteMatch[1], 10) : 0;
@@ -294,11 +294,11 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
     }
     return mins > 0
       ? `Call mode activated. Muting all operatives for ${mins} minutes so you are not disturbed, sir.`
-      : 'Call mode activated. All operatives are muted so you will not be disturbed, sir. Say unmute or double-click the tray icon when your call finishes.';
+      : 'Call mode activated. All operatives are muted so you will not be disturbed, sir. Say call is over or double-click the tray icon when your call finishes.';
   }
 
   if (
-    /^(?:unmute|call (?:is )?(?:over|done|ended)|meeting (?:is )?(?:over|done|ended)|i(?:'m| am) back|i have returned|cancel mute)$/i.test(
+    /^(?:call (?:is )?(?:over|done|ended)|meeting (?:is )?(?:over|done|ended)|i(?:'m| am) back|i have returned|unmute\s+(?:yourself|operatives?|assistant))$/i.test(
       text,
     )
   ) {
@@ -553,18 +553,124 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
   }
 
   // 2b. Volume & Single Media Controls
-  if (/^(volume up|turn (up|the volume up)|increase( the)? volume|louder)$/.test(text)) {
-    await controller.executeTool('control_media_volume', { command: 'volume_up', steps: 5 });
-    return 'Volume up, sir.';
+  // Specific percentage setting ("set volume to 50%", "volume 80", "sound to 30%", "volume to 70%")
+  const volumeSetMatch = text.match(
+    /^(?:(?:set|turn|change|put)\s+(?:the\s+)?(?:volume|sound|audio)(?:\s+(?:level|to|at))?\s*|(?:the\s+)?volume\s+(?:to\s+|at\s+)?|sound\s+(?:to\s+|at\s+)?)(\d{1,3})\s*(?:%|percent)?$/i,
+  );
+  if (volumeSetMatch) {
+    const rawVal = Number.parseInt(volumeSetMatch[1], 10);
+    if (!Number.isNaN(rawVal) && rawVal >= 0 && rawVal <= 100) {
+      logger.info(`[FAST] Setting volume to ${rawVal}%`);
+      const out = JSON.parse(
+        (await controller.executeTool('control_media_volume', { command: 'set_volume', percent: rawVal })).text,
+      );
+      return out.message ? `${out.message}, sir.` : `Set volume to ${rawVal} percent, sir.`;
+    }
   }
-  if (/^(volume down|turn (down|the volume down)|decrease( the)? volume|lower( the)? volume|quieter)$/.test(text)) {
-    await controller.executeTool('control_media_volume', { command: 'volume_down', steps: 5 });
-    return 'Volume down, sir.';
+
+  // Volume Presets (max, full, half, low, min)
+  if (
+    /^(?:(?:set|turn|change|put)\s+(?:the\s+)?)?(?:volume|sound)\s+(?:to\s+)?(?:max|maximum|full)$/i.test(text) ||
+    /^(?:max|maximum|full)\s+(?:volume|sound)$/i.test(text)
+  ) {
+    logger.info('[FAST] Setting volume to max (100%)');
+    const out = JSON.parse(
+      (await controller.executeTool('control_media_volume', { command: 'set_volume', percent: 100 })).text,
+    );
+    return out.message ? `${out.message}, sir.` : 'Set volume to 100 percent, sir.';
   }
-  if (/^(mute|unmute|mute( the)? volume|toggle mute)$/.test(text)) {
-    await controller.executeTool('control_media_volume', { command: 'mute' });
-    return 'Toggled mute, sir.';
+  if (
+    /^(?:(?:set|turn|change|put)\s+(?:the\s+)?)?(?:volume|sound)\s+(?:to\s+)?half$/i.test(text) ||
+    /^half\s+(?:volume|sound)$/i.test(text)
+  ) {
+    logger.info('[FAST] Setting volume to half (50%)');
+    const out = JSON.parse(
+      (await controller.executeTool('control_media_volume', { command: 'set_volume', percent: 50 })).text,
+    );
+    return out.message ? `${out.message}, sir.` : 'Set volume to 50 percent, sir.';
   }
+  if (
+    /^(?:(?:set|turn|change|put)\s+(?:the\s+)?)?(?:volume|sound)\s+(?:to\s+)?(?:low|minimum|min)$/i.test(text) ||
+    /^(?:low|minimum|min)\s+(?:volume|sound)$/i.test(text)
+  ) {
+    logger.info('[FAST] Setting volume to low (20%)');
+    const out = JSON.parse(
+      (await controller.executeTool('control_media_volume', { command: 'set_volume', percent: 20 })).text,
+    );
+    return out.message ? `${out.message}, sir.` : 'Set volume to 20 percent, sir.';
+  }
+
+  // Delta volume adjustments ("volume up by 15", "increase volume by 20", "turn down volume by 10")
+  const volUpDeltaMatch = text.match(
+    /^(?:volume\s+up|increase\s+(?:the\s+)?volume|turn\s+(?:up\s+(?:the\s+)?volume|the\s+volume\s+up)|raise\s+(?:the\s+)?volume|louder)\s+(?:by\s+)?(\d{1,2})\s*(?:%|percent|steps|points)?$/i,
+  );
+  if (volUpDeltaMatch) {
+    const delta = Number.parseInt(volUpDeltaMatch[1], 10);
+    if (!Number.isNaN(delta) && delta > 0) {
+      logger.info(`[FAST] Increasing volume by ${delta}%`);
+      const out = JSON.parse(
+        (await controller.executeTool('control_media_volume', { command: 'volume_up', delta })).text,
+      );
+      return out.message ? `${out.message}, sir.` : 'Increased volume, sir.';
+    }
+  }
+
+  const volDownDeltaMatch = text.match(
+    /^(?:volume\s+down|decrease\s+(?:the\s+)?volume|turn\s+(?:down\s+(?:the\s+)?volume|the\s+volume\s+down)|lower\s+(?:the\s+)?volume|reduce\s+(?:the\s+)?volume|quieter)\s+(?:by\s+)?(\d{1,2})\s*(?:%|percent|steps|points)?$/i,
+  );
+  if (volDownDeltaMatch) {
+    const delta = Number.parseInt(volDownDeltaMatch[1], 10);
+    if (!Number.isNaN(delta) && delta > 0) {
+      logger.info(`[FAST] Decreasing volume by ${delta}%`);
+      const out = JSON.parse(
+        (await controller.executeTool('control_media_volume', { command: 'volume_down', delta })).text,
+      );
+      return out.message ? `${out.message}, sir.` : 'Decreased volume, sir.';
+    }
+  }
+
+  // Standard volume up / down
+  if (/^(?:volume up|turn\s+(?:up\s+(?:the\s+)?volume|the\s+volume\s+up|up)|increase( the)? volume|sound up|raise( the)? volume|louder|make it louder)$/i.test(text)) {
+    const out = JSON.parse(
+      (await controller.executeTool('control_media_volume', { command: 'volume_up', delta: 10, steps: 5 })).text,
+    );
+    return out.message ? `${out.message}, sir.` : 'Volume up, sir.';
+  }
+  if (/^(?:volume down|turn\s+(?:down\s+(?:the\s+)?volume|the\s+volume\s+down|down)|decrease( the)? volume|sound down|lower( the)? volume|reduce( the)? volume|quieter|make it quieter)$/i.test(text)) {
+    const out = JSON.parse(
+      (await controller.executeTool('control_media_volume', { command: 'volume_down', delta: 10, steps: 5 })).text,
+    );
+    return out.message ? `${out.message}, sir.` : 'Volume down, sir.';
+  }
+
+  // Mute and Unmute
+  if (/^(?:mute|mute( the)? (?:volume|sound|audio)|silence)$/i.test(text)) {
+    const out = JSON.parse((await controller.executeTool('control_media_volume', { command: 'mute' })).text);
+    return out.message ? `${out.message}, sir.` : 'Muted audio, sir.';
+  }
+  if (/^(?:unmute|unmute( the)? (?:volume|sound|audio))$/i.test(text)) {
+    const out = JSON.parse((await controller.executeTool('control_media_volume', { command: 'unmute' })).text);
+    return out.message ? `${out.message}, sir.` : 'Unmuted audio, sir.';
+  }
+
+  // Volume status and General Control queries ("what is the volume", "control the volume")
+  if (
+    /^(?:what(?:'?s| is)(?: the)? (?:current )?(?:volume|sound level|audio level)|check(?: the)? (?:volume|sound)|(?:current )?volume level)$/i.test(
+      text,
+    )
+  ) {
+    const out = JSON.parse((await controller.executeTool('control_media_volume', { command: 'get_volume' })).text);
+    if (out.ok && out.volume !== undefined) {
+      return `Master volume is currently at ${out.volume} percent, sir.`;
+    }
+    return out.message ? `${out.message}, sir.` : 'Checked system volume, sir.';
+  }
+  if (/^(?:control(?: the)? volume|adjust(?: the)? volume|volume control)$/i.test(text)) {
+    const out = JSON.parse((await controller.executeTool('control_media_volume', { command: 'get_volume' })).text);
+    const volStr = out.ok && out.volume !== undefined ? ` at ${out.volume} percent` : '';
+    return `Master volume is currently${volStr}, sir. You can say volume up, volume down, mute, or set volume to any percentage.`;
+  }
+
   if (
     /^(?:pause|play|play\s+pause|unpause|resume|continue)(?:\s+(?:the|this|that|my))?(?:\s+(?:music|video|media|playback|song|track|stream|movie))?$/i.test(text) ||
     /^(?:toggle\s+)?(?:play\s+pause|playback)$/i.test(text)
@@ -705,6 +811,47 @@ export async function tryFastPath(rawText, controller, activeAgent = 'ultron') {
       logger.info(`[FAST] Opening site "${target}"`);
       const out = JSON.parse((await controller.executeTool('open_url', { url: SITE_SHORTCUTS[target] })).text);
       if (out.ok) return `Opening ${target}, sir.`;
+    }
+  }
+
+  // 5c. Close Active Window, Active Tab, or Application by Name
+  // Active window/app ("close this app", "close current window", "close active window", "close window", "close this")
+  if (
+    /^(?:close|quit|exit|kill)\s+(?:the\s+)?(?:this|current|active|foreground)(?:\s+(?:app|application|window|program))?$/i.test(text) ||
+    /^(?:close|quit|exit|kill)\s+(?:the\s+)?(?:app|application|window|program)$/i.test(text) ||
+    /^(?:close|quit|exit|kill)\s+this$/i.test(text)
+  ) {
+    logger.info('[FAST] Closing active/foreground window');
+    const out = JSON.parse((await controller.executeTool('close_app', { app: 'this' })).text);
+    return out.message ? `${out.message}, sir.` : 'Closed current window, sir.';
+  }
+
+  // Active tab ("close tab", "close this tab", "close active tab", "close current tab")
+  if (/^(?:close|quit|exit)\s+(?:the\s+|this\s+|current\s+|active\s+)?tab$/i.test(text)) {
+    logger.info('[FAST] Closing active tab');
+    const out = JSON.parse((await controller.executeTool('close_app', { app: 'tab' })).text);
+    return out.message ? `${out.message}, sir.` : 'Closed active tab, sir.';
+  }
+
+  // Named application ("close chrome", "close notepad", "close spotify", "close word", "close vscode", "close calculator", "close edge", "close browser", "close task manager", etc.)
+  const closeNamedMatch = text.match(
+    /^(?:close|quit|exit|terminate|kill)\s+(?:the\s+)?([a-zA-Z0-9\s._-]+?)(?:\s+(?:app|application|window|program))?$/i,
+  );
+  if (closeNamedMatch) {
+    const rawTarget = closeNamedMatch[1].trim();
+    const target = rawTarget.toLowerCase();
+    // Exclude special system commands handled elsewhere
+    if (
+      !/^(?:hud|ui|dashboard|interface|hologram|fullscreen|full\s+screen|call|conversation|listening|timer|alarm|reels?\s+mode)$/i.test(
+        target,
+      )
+    ) {
+      logger.info(`[FAST] Closing app "${rawTarget}"`);
+      const out = JSON.parse((await controller.executeTool('close_app', { app: rawTarget })).text);
+      if (out.ok && out.message) {
+        return `${out.message}, sir.`;
+      }
+      return out.message || `Closed ${rawTarget}, sir.`;
     }
   }
 

@@ -12,9 +12,48 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDevice {
+    int Activate(ref Guid id, int clsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object interfacePointer);
+}
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDeviceEnumerator {
+    int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint);
+}
+
+[Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioEndpointVolume {
+    int RegisterControlChangeNotify(IntPtr pNotify);
+    int UnregisterControlChangeNotify(IntPtr pNotify);
+    int GetChannelCount(out uint pnChannelCount);
+    int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+    int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+    int GetMasterVolumeLevel(out float pfLevelDB);
+    int GetMasterVolumeLevelScalar(out float pfLevel);
+    int SetChannelVolumeLevel(uint nChannel, float fLevelDB, ref Guid pguidEventContext);
+    int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
+    int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+    int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+    int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+    int VolumeStepUp(ref Guid pguidEventContext);
+    int VolumeStepDown(ref Guid pguidEventContext);
+    int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+    int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+internal class MMDeviceEnumeratorComObject { }
+
 public class Win32Control {
     [DllImport("user32.dll")]
     public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -136,6 +175,50 @@ public class Win32Control {
         }, IntPtr.Zero);
         return list;
     }
+
+    public static int GetMasterVolume() {
+        try {
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+            IMMDevice dev;
+            if (enumerator.GetDefaultAudioEndpoint(0, 1, out dev) == 0 && dev != null) {
+                Guid iid = typeof(IAudioEndpointVolume).GUID;
+                object volObj;
+                if (dev.Activate(ref iid, 1, IntPtr.Zero, out volObj) == 0 && volObj != null) {
+                    var vol = (IAudioEndpointVolume)volObj;
+                    float level;
+                    vol.GetMasterVolumeLevelScalar(out level);
+                    return (int)Math.Round(level * 100f);
+                }
+            }
+        } catch {}
+        return -1;
+    }
+
+    public static int SetMasterVolume(int percent) {
+        try {
+            percent = Math.Max(0, Math.Min(100, percent));
+            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+            IMMDevice dev;
+            if (enumerator.GetDefaultAudioEndpoint(0, 1, out dev) == 0 && dev != null) {
+                Guid iid = typeof(IAudioEndpointVolume).GUID;
+                object volObj;
+                if (dev.Activate(ref iid, 1, IntPtr.Zero, out volObj) == 0 && volObj != null) {
+                    var vol = (IAudioEndpointVolume)volObj;
+                    Guid ctx = Guid.Empty;
+                    vol.SetMasterVolumeLevelScalar(percent / 100f, ref ctx);
+                    return percent;
+                }
+            }
+        } catch {}
+        return -1;
+    }
+
+    public static int AdjustMasterVolume(int delta) {
+        int cur = GetMasterVolume();
+        if (cur < 0) cur = 50;
+        int target = Math.Max(0, Math.Min(100, cur + delta));
+        return SetMasterVolume(target);
+    }
 }
 "@
 
@@ -174,6 +257,9 @@ $appAliases = @{
     "camera"        = "microsoft.windows.camera:"
     "photos"        = "ms-photos:"
     "snipping tool" = "ms-screenclip:"
+    "browser"       = "chrome.exe"
+    "document"      = "winword.exe"
+    "word document" = "winword.exe"
     "word"          = "winword.exe"
     "excel"         = "excel.exe"
     "powerpoint"    = "powerpnt.exe"
@@ -235,13 +321,120 @@ function Handle-Action($req) {
             return @{ message = "Opened $url in default browser" }
         }
 
+        "close_app" {
+            $raw = if ($args.app) { [string]$args.app } elseif ($args.name) { [string]$args.name } elseif ($args.title) { [string]$args.title } else { "this" }
+            $target = $raw.Trim().ToLowerInvariant()
+            $force = [bool]$args.force
+
+            # 1. Close current / active window or tab
+            if ([string]::IsNullOrWhiteSpace($target) -or $target -match '^(?:this|current|active)(?:\s+(?:app|window|program))?$|^window$') {
+                $hwnd = [Win32Control]::GetForegroundWindow()
+                if ($hwnd -ne [IntPtr]::Zero) {
+                    [Win32Control]::PostMessage($hwnd, [Win32Control]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                    return @{ message = "Closed active window" }
+                }
+                [Win32Control]::PressCombo([byte[]]@(0x12, 0x73)) # Alt+F4
+                return @{ message = "Closed active window" }
+            }
+
+            if ($target -match '^(?:this\s+)?tab$') {
+                [Win32Control]::PressCombo([byte[]]@(0x11, 0x57)) # Ctrl+W
+                return @{ message = "Closed active tab" }
+            }
+
+            # 2. Resolve app aliases
+            $procQuery = $target
+            if ($appAliases.ContainsKey($target)) {
+                $alias = $appAliases[$target]
+                $procQuery = [System.IO.Path]::GetFileNameWithoutExtension($alias)
+            }
+            $procQuery = ($procQuery -replace '\.exe$', '').Trim()
+
+            $isBrowser = ($target -eq "browser" -or $target -eq "web browser" -or $target -eq "the browser")
+            $browserProcs = @("chrome", "msedge", "firefox", "brave")
+
+            # 3. Gracefully close matching open top-level windows
+            $wins = [Win32Control]::GetOpenWindows()
+            $matchedWins = $wins | Where-Object {
+                if ($isBrowser) {
+                    $browserProcs -contains $_.ProcessName.ToLowerInvariant()
+                } else {
+                    $_.ProcessName.ToLowerInvariant() -like "*$procQuery*" -or $_.Title.ToLowerInvariant() -like "*$target*"
+                }
+            }
+
+            $closedCount = 0
+            if ($matchedWins) {
+                foreach ($w in $matchedWins) {
+                    $hwnd = [IntPtr]$w.Handle
+                    [Win32Control]::PostMessage($hwnd, [Win32Control]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                    $closedCount++
+                }
+            }
+
+            # 4. If no window caught or force requested, use process cleanup
+            if ($closedCount -eq 0 -or $force) {
+                $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                    if ($isBrowser) {
+                        $browserProcs -contains $_.ProcessName.ToLowerInvariant()
+                    } else {
+                        $_.ProcessName.ToLowerInvariant() -like "*$procQuery*" -or $_.MainWindowTitle.ToLowerInvariant() -like "*$target*"
+                    }
+                }
+                if ($procs) {
+                    foreach ($p in $procs) {
+                        try {
+                            if ($force) { $p.Kill() } else { $p.CloseMainWindow() | Out-Null }
+                            $closedCount++
+                        } catch {}
+                    }
+                }
+            }
+
+            if ($closedCount -gt 0) {
+                return @{ message = "Closed $target" }
+            } else {
+                return @{ message = "No running window or app found for $target" }
+            }
+        }
+
         "media_volume" {
             $cmd = ([string]$args.command).Trim().ToLowerInvariant()
             $steps = if ($args.steps) { [Math]::Max(1, [Math]::Min(25, [int]$args.steps)) } else { 5 }
+            $percent = if ($null -ne $args.percent) { [int]$args.percent } elseif ($null -ne $args.level) { [int]$args.level } else { -1 }
+
             switch ($cmd) {
-                "volume_up"   { for ($i = 0; $i -lt $steps; $i++) { [Win32Control]::TapKey(0xAF); Start-Sleep -Milliseconds 25 }; return @{ message = "Increased volume by $steps steps" } }
-                "volume_down" { for ($i = 0; $i -lt $steps; $i++) { [Win32Control]::TapKey(0xAE); Start-Sleep -Milliseconds 25 }; return @{ message = "Decreased volume by $steps steps" } }
+                "set_volume" {
+                    if ($percent -ge 0) {
+                        $set = [Win32Control]::SetMasterVolume($percent)
+                        if ($set -ge 0) { return @{ message = "Set volume to $set percent"; volume = $set } }
+                    }
+                    throw "Invalid volume percentage: $percent"
+                }
+                "get_volume" {
+                    $cur = [Win32Control]::GetMasterVolume()
+                    return @{ message = "Current volume is $cur percent"; volume = $cur }
+                }
+                "volume_up" {
+                    $delta = if ($args.delta) { [int]$args.delta } else { [Math]::Max(4, $steps * 2) }
+                    $newVol = [Win32Control]::AdjustMasterVolume($delta)
+                    if ($newVol -ge 0) {
+                        return @{ message = "Increased volume to $newVol percent"; volume = $newVol }
+                    }
+                    for ($i = 0; $i -lt $steps; $i++) { [Win32Control]::TapKey(0xAF); Start-Sleep -Milliseconds 25 }
+                    return @{ message = "Increased volume by $steps steps" }
+                }
+                "volume_down" {
+                    $delta = if ($args.delta) { [int]$args.delta } else { [Math]::Max(4, $steps * 2) }
+                    $newVol = [Win32Control]::AdjustMasterVolume(-$delta)
+                    if ($newVol -ge 0) {
+                        return @{ message = "Decreased volume to $newVol percent"; volume = $newVol }
+                    }
+                    for ($i = 0; $i -lt $steps; $i++) { [Win32Control]::TapKey(0xAE); Start-Sleep -Milliseconds 25 }
+                    return @{ message = "Decreased volume by $steps steps" }
+                }
                 "mute"        { [Win32Control]::TapKey(0xAD); return @{ message = "Toggled mute" } }
+                "unmute"      { [Win32Control]::TapKey(0xAD); return @{ message = "Unmuted volume" } }
                 "play_pause"  { [Win32Control]::TapKey(0xB3); return @{ message = "Toggled media play/pause" } }
                 "next_track"  { [Win32Control]::TapKey(0xB0); return @{ message = "Skipped to next track" } }
                 "prev_track"  { [Win32Control]::TapKey(0xB1); return @{ message = "Went to previous track" } }
